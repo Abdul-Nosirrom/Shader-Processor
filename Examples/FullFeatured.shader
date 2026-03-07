@@ -41,6 +41,7 @@ Shader "FreeSkies/Examples/FullFeatured"
             "RenderPipeline" = "UniversalPipeline"
             "Queue" = "Geometry"
             "Outlines" = "On"
+            "Tessellation" = "On"
         }
 
         HLSLINCLUDE
@@ -197,8 +198,8 @@ Shader "FreeSkies/Examples/FullFeatured"
                 
                 // Sample textures
                 half4 albedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _BaseColor;
-                albedo.rgb *= input.vertexColor.rgb;
-                
+                //albedo.rgb *= input.vertexColor.rgb;
+                return albedo;
                 // Setup lighting
                 InputData inputData = (InputData)0;
                 inputData.positionWS = input.positionWS;
