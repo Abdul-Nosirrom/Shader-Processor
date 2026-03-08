@@ -26,7 +26,6 @@ Shader "Tests/09_EverythingCombined"
             "RenderType" = "Opaque"
             "RenderPipeline" = "UniversalPipeline"
             "Tessellation" = "On"
-            "Outlines" = "On"
         }
 
         HLSLINCLUDE
@@ -154,6 +153,7 @@ Shader "Tests/09_EverythingCombined"
             ENDHLSL
         }
 
+        [InjectPass:Outline]
         [InjectBasePasses]
     }
     Fallback "Hidden/Universal Render Pipeline/FallbackError"

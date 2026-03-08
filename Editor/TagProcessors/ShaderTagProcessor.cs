@@ -39,10 +39,7 @@ namespace FS.Shaders.Editor
         /// </summary>
         void ModifyPass(ShaderContext ctx, PassInfo pass);
         
-        /// <summary>Stage 4: Queue passes for injection.</summary>
-        void InjectPasses(ShaderContext ctx);
-        
-        /// <summary>Stage 5: Provide template replacements for generated passes.</summary>
+        /// <summary>Stage 4: Provide template replacements for generated passes.</summary>
         Dictionary<string, string> GetPassReplacements(ShaderContext ctx, string passName);
     }
     
@@ -73,7 +70,6 @@ namespace FS.Shaders.Editor
         public virtual string GetPropertiesEntries(ShaderContext ctx) => null;
         public virtual string GetCBufferEntries(ShaderContext ctx) => null;
         public virtual void ModifyPass(ShaderContext ctx, PassInfo pass) { }
-        public virtual void InjectPasses(ShaderContext ctx) { }
         
         public virtual Dictionary<string, string> GetPassReplacements(ShaderContext ctx, string passName)
         {
@@ -83,18 +79,6 @@ namespace FS.Shaders.Editor
         //=============================================================================
         // Helper Methods for Derived Classes
         //=============================================================================
-        
-        /// <summary>
-        /// Queue a pass for injection at the end of SubShader.
-        /// </summary>
-        protected void QueuePass(ShaderContext ctx, string passCode)
-        {
-            ctx.QueuedPasses.Add(new QueuedPass
-            {
-                PassCode = passCode,
-                SourceProcessor = TagName
-            });
-        }
         
         /// <summary>
         /// Check if a property already exists (in original Properties block or processor additions).
@@ -308,19 +292,6 @@ namespace FS.Shaders.Editor
                     {
                         Debug.LogError($"[ShaderProcessor] {processor.TagName}.ModifyPass failed on pass '{pass.Name}': {e.Message}");
                     }
-                }
-            }
-            
-            // Stage 4: Inject Passes (queued for later injection)
-            foreach (var processor in allEnabledProcessors)
-            {
-                try
-                {
-                    processor.InjectPasses(ctx);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError($"[ShaderProcessor] {processor.TagName}.InjectPasses failed: {e.Message}");
                 }
             }
         }

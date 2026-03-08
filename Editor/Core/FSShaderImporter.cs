@@ -90,6 +90,8 @@ namespace FS.Shaders.Editor
         bool m_ShowTags = true;
         bool m_ShowStructs = true;
         bool m_ShowHooks = true;
+        bool m_ShowPasses = true;
+        bool m_ShowTagProcessors = true;
         ShaderContext m_ParsedContext;
         
         public override void OnEnable()
@@ -192,6 +194,76 @@ namespace FS.Shaders.Editor
                 {
                     EditorGUILayout.LabelField($"Helper Functions: {m_ParsedContext.Hooks.HelperFunctions.Count}");
                 }
+                
+                EditorGUI.indentLevel--;
+            }
+            
+            // Active passes section
+            m_ShowPasses = EditorGUILayout.Foldout(m_ShowPasses, "Active Passes", true);
+            if (m_ShowPasses && m_ParsedContext != null)
+            {
+                EditorGUI.indentLevel++;
+                
+                string source = m_ParsedContext.ProcessedSource;
+                bool hasBasePasses = source.Contains("[InjectBasePasses]");
+                bool anyActive = false;
+                
+                foreach (var injector in ShaderPassInjectorRegistry.All)
+                {
+                    bool active = (hasBasePasses && injector.IsBasePass)
+                               || source.Contains($"[InjectPass:{injector.PassName}]");
+                    
+                    if (active)
+                    {
+                        string label = injector.IsBasePass ? $"{injector.PassName} (base)" : injector.PassName;
+                        EditorGUILayout.LabelField(label, $"Template: {injector.TemplateName}.hlsl");
+                        anyActive = true;
+                    }
+                }
+                
+                if (!anyActive)
+                    EditorGUILayout.LabelField("None", EditorStyles.miniLabel);
+                
+                EditorGUI.indentLevel--;
+            }
+            
+            // Active tag processors section
+            m_ShowTagProcessors = EditorGUILayout.Foldout(m_ShowTagProcessors, "Active Tag Processors", true);
+            if (m_ShowTagProcessors && m_ParsedContext != null)
+            {
+                EditorGUI.indentLevel++;
+                
+                bool anyActive = false;
+                foreach (var proc in ShaderTagProcessorRegistry.GetAllProcessors())
+                {
+                    bool enabled = false;
+                    
+                    // Check SubShader tags
+                    if (m_ParsedContext.SubShaderTags.TryGetValue(proc.TagName, out string val))
+                        enabled = IsTagEnabled(val);
+                    
+                    // Check pass-level tags
+                    if (!enabled)
+                    {
+                        foreach (var pass in m_ParsedContext.Passes)
+                        {
+                            if (pass.IsTagEnabled(proc.TagName))
+                            {
+                                enabled = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (enabled)
+                    {
+                        EditorGUILayout.LabelField(proc.TagName, $"Priority: {proc.Priority}");
+                        anyActive = true;
+                    }
+                }
+                
+                if (!anyActive)
+                    EditorGUILayout.LabelField("None", EditorStyles.miniLabel);
                 
                 EditorGUI.indentLevel--;
             }
@@ -311,6 +383,13 @@ namespace FS.Shaders.Editor
         {
             string status = string.IsNullOrEmpty(funcName) ? "Not defined" : funcName;
             EditorGUILayout.LabelField(pragma, status);
+        }
+        
+        static bool IsTagEnabled(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return false;
+            value = value.Trim().ToLowerInvariant();
+            return value == "on" || value == "true" || value == "enabled" || value == "1" || value == "yes";
         }
         
         void ShowProcessedShader()

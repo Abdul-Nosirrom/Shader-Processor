@@ -24,7 +24,6 @@ Shader "FreeSkies/Examples/WithOutlines"
             "RenderPipeline" = "UniversalPipeline"
             "Queue" = "Geometry"
             "ShaderGen" = "True"
-            "Outlines" = "On"
         }
 
         HLSLINCLUDE
@@ -100,9 +99,8 @@ Shader "FreeSkies/Examples/WithOutlines"
             ENDHLSL
         }
 
+        [InjectPass:Outline]
         [InjectBasePasses]
-        
-        // Outline pass will be auto-injected by OutlinesProcessor
     }
 
     Fallback "Hidden/Universal Render Pipeline/FallbackError"

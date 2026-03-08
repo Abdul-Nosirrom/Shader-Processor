@@ -122,20 +122,17 @@ namespace FS.Shaders.Editor
         // Tag Processor State
         //=============================================================================
         
-        /// <summary>Passes queued for injection by tag processors.</summary>
-        public List<QueuedPass> QueuedPasses = new List<QueuedPass>();
-        
         /// <summary>Feature flags set by tag processors.</summary>
         public HashSet<string> EnabledFeatures = new HashSet<string>();
         
         //=============================================================================
-        // Processor Additions (collected from tag processors, preserved across re-parse)
+        // Processor Additions (collected from pass injectors and tag processors)
         //=============================================================================
         
-        /// <summary>Property entries declared by tag processors.</summary>
+        /// <summary>Property entries declared by pass injectors and tag processors.</summary>
         public string ProcessorPropertiesEntries = "";
         
-        /// <summary>CBUFFER entries declared by tag processors.</summary>
+        /// <summary>CBUFFER entries declared by pass injectors and tag processors.</summary>
         public string ProcessorCBufferEntries = "";
         
         //=============================================================================
@@ -146,7 +143,6 @@ namespace FS.Shaders.Editor
         public void EnableFeature(string feature) => EnabledFeatures.Add(feature);
         
         public bool TessellationEnabled => HasFeature("Tessellation");
-        public bool OutlinesEnabled => HasFeature("Outlines");
     }
     
     //=============================================================================
@@ -307,14 +303,5 @@ namespace FS.Shaders.Editor
             val = val.Trim().ToLowerInvariant();
             return val == "on" || val == "true" || val == "enabled" || val == "1" || val == "yes";
         }
-    }
-    
-    /// <summary>
-    /// A pass queued for injection by a tag processor.
-    /// </summary>
-    public class QueuedPass
-    {
-        public string PassCode;
-        public string SourceProcessor;  // Which tag processor queued this
     }
 }

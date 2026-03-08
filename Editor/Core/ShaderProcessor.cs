@@ -29,33 +29,29 @@ namespace FS.Shaders.Editor
             
             // Stage 1: Full parse of the user's original shader source.
             // Establishes struct names/fields, function names, CBUFFER content, textures,
-            // hooks, pass list, and forward pass reference. All detection runs against
-            // clean, unmodified code — this is the single source of truth for identity.
+            // hooks, pass list, and forward pass reference.
             ShaderParser.Parse(ctx);
             
-            // Stage 2: Run tag processors (property/CBUFFER injection, ModifyPass, pass queuing).
+            // Stage 2: Collect material data from active pass injectors.
+            // Scans for [InjectBasePasses] and [InjectPass:X] markers to determine which
+            // pass injectors are active, then collects their properties and CBUFFER entries
+            // into ProcessorPropertiesEntries/ProcessorCBufferEntries. This runs BEFORE
+            // ProcessAllTags so pass injector material data gets injected into source
+            // alongside tag processor data in the same flow.
+            ShaderPassInjectorRegistry.CollectMaterialEntries(ctx);
+            
+            // Stage 3: Run tag processors (property/CBUFFER injection, ModifyPass).
             // Internally this:
-            //   1. Injects processor properties and CBUFFER entries into ctx.ProcessedSource
-            //   2. Calls ReparseAllPasses — creates fresh PassInfo with expanded CBUFFER content
-            //   3. Runs ModifyPass per-pass (e.g., tessellation injects code into ProcessedSource)
+            //   1. Collects tag processor properties/CBUFFER (appended to same fields)
+            //   2. Injects ALL accumulated entries (pass injector + tag processor) into source
+            //   3. Calls ReparseAllPasses for fresh PassInfo with expanded CBUFFER
+            //   4. Runs ModifyPass per-pass (e.g., tessellation injects code into source)
             //
-            // After this returns, ctx.ForwardPass.HlslProgram is the snapshot from step 2 —
-            // it has the expanded CBUFFER but NO ModifyPass modifications (tess code, etc.).
-            // ModifyPass only writes to ctx.ProcessedSource, not to PassInfo.HlslProgram.
-            // This means ExtractForwardPassContent naturally sees clean content.
-            //
-            // No second Parse() is needed. Struct names, function names, and struct field
-            // definitions from Stage 1 remain correct and untouched. The expanded CBUFFER
-            // for generated passes is handled by GenerateCBuffer, which combines
-            // ctx.CBufferContent (from Stage 1) with ctx.ProcessorCBufferEntries (from
-            // tag processors) — no re-read of source required.
+            // After this returns, ctx.ForwardPass.HlslProgram is post-CBUFFER but pre-ModifyPass.
             ShaderTagProcessorRegistry.ProcessAllTags(ctx);
             
-            // Stage 3: Process pass markers and generate passes
+            // Stage 4: Process pass markers and generate passes using the registry.
             ProcessPassMarkers(ctx);
-            
-            // Stage 4: Inject tag processor passes (outlines, etc.)
-            InjectQueuedPasses(ctx);
             
             // Stage 5: Validation
             ValidateProcessedShader(ctx);
@@ -67,19 +63,28 @@ namespace FS.Shaders.Editor
         // Pass Marker Processing
         //=============================================================================
         
+        /// <summary>
+        /// Find and replace pass injection markers with generated pass code.
+        /// Handles [InjectBasePasses] (all base passes) and [InjectPass:X] (specific pass).
+        /// </summary>
         void ProcessPassMarkers(ShaderContext ctx)
         {
-            // Replace [InjectBasePasses] with all base passes
-            ProcessSingleMarker(ctx, "[InjectBasePasses]", () => PassGenerator.GenerateAllBasePasses(ctx));
+            // [InjectBasePasses] → all passes where IsBasePass == true
+            ProcessSingleMarker(ctx, "[InjectBasePasses]",
+                () => ShaderPassInjectorRegistry.GenerateAllBasePasses(ctx));
             
-            // Individual pass markers (if user wants specific passes)
-            ProcessSingleMarker(ctx, "[InjectPass:ShadowCaster]", () => PassGenerator.GenerateShadowCasterPass(ctx));
-            ProcessSingleMarker(ctx, "[InjectPass:DepthOnly]", () => PassGenerator.GenerateDepthOnlyPass(ctx));
-            ProcessSingleMarker(ctx, "[InjectPass:DepthNormals]", () => PassGenerator.GenerateDepthNormalsPass(ctx));
-            ProcessSingleMarker(ctx, "[InjectPass:MotionVectors]", () => PassGenerator.GenerateMotionVectorsPass(ctx));
-            ProcessSingleMarker(ctx, "[InjectPass:Meta]", () => PassGenerator.GenerateMetaPass(ctx));
+            // [InjectPass:X] → specific pass by name, discovered from registry
+            foreach (var injector in ShaderPassInjectorRegistry.All)
+            {
+                string marker = $"[InjectPass:{injector.PassName}]";
+                ProcessSingleMarker(ctx, marker,
+                    () => ShaderPassInjectorRegistry.Generate(ctx, injector));
+            }
         }
         
+        /// <summary>
+        /// Replace the first non-commented occurrence of a marker with generated code.
+        /// </summary>
         void ProcessSingleMarker(ShaderContext ctx, string marker, System.Func<string> generator)
         {
             string source = ctx.ProcessedSource;
@@ -123,33 +128,6 @@ namespace FS.Shaders.Editor
             }
             
             return false;
-        }
-        
-        //=============================================================================
-        // Queued Pass Injection
-        //=============================================================================
-        
-        void InjectQueuedPasses(ShaderContext ctx)
-        {
-            if (ctx.QueuedPasses.Count == 0) return;
-            
-            int injectionIndex = ShaderParser.GetPassInjectionIndex(ctx.ProcessedSource);
-            if (injectionIndex < 0)
-            {
-                Debug.LogWarning("[ShaderProcessor] Could not find pass injection point. Queued passes not injected.");
-                return;
-            }
-            
-            // Build all queued passes
-            var sb = new System.Text.StringBuilder();
-            foreach (var queuedPass in ctx.QueuedPasses)
-            {
-                sb.AppendLine();
-                sb.AppendLine(queuedPass.PassCode);
-            }
-            
-            // Insert at injection point
-            ctx.ProcessedSource = ctx.ProcessedSource.Insert(injectionIndex, sb.ToString());
         }
         
         //=============================================================================

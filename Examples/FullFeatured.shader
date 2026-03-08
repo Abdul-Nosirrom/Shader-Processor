@@ -40,7 +40,6 @@ Shader "FreeSkies/Examples/FullFeatured"
             "RenderType" = "Opaque"
             "RenderPipeline" = "UniversalPipeline"
             "Queue" = "Geometry"
-            "Outlines" = "On"
             "Tessellation" = "On"
         }
 
@@ -225,9 +224,8 @@ Shader "FreeSkies/Examples/FullFeatured"
             ENDHLSL
         }
 
+        [InjectPass:Outline]
         [InjectBasePasses]
-        
-        // Outline pass auto-injected
     }
 
     Fallback "Hidden/Universal Render Pipeline/FallbackError"

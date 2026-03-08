@@ -7,7 +7,7 @@ namespace FS.Shaders.Editor
 {
     /// <summary>
     /// Editor window that displays documentation for all registered
-    /// hooks, tag processors, and passes. All data is discovered
+    /// hooks, tag processors, and pass injectors. All data is discovered
     /// dynamically via TypeCache, so it's always up to date.
     /// </summary>
     public class ShaderProcessorDocsWindow : EditorWindow
@@ -20,6 +20,7 @@ namespace FS.Shaders.Editor
         // Cached data (refreshed on enable)
         List<ShaderHookDefinition> _hooks;
         List<IShaderTagProcessor> _tagProcessors;
+        List<ShaderPassInjector> _passInjectors;
         
         // Styles (lazy-initialized)
         GUIStyle _headerStyle;
@@ -49,9 +50,11 @@ namespace FS.Shaders.Editor
         {
             ShaderHookRegistry.Initialize();
             ShaderTagProcessorRegistry.Initialize();
+            ShaderPassInjectorRegistry.Initialize();
             
             _hooks = ShaderHookRegistry.All.ToList();
             _tagProcessors = ShaderTagProcessorRegistry.GetAllProcessors().ToList();
+            _passInjectors = ShaderPassInjectorRegistry.All.ToList();
         }
         
         //=============================================================================
@@ -76,9 +79,9 @@ namespace FS.Shaders.Editor
             
             _monoStyle = new GUIStyle(EditorStyles.label)
             {
-                font = Font.CreateDynamicFontFromOSFont("Consolas", 11),
                 fontSize = 11,
-                richText = true
+                richText = true,
+                wordWrap = false
             };
             
             _descriptionStyle = new GUIStyle(EditorStyles.wordWrappedLabel)
@@ -114,6 +117,7 @@ namespace FS.Shaders.Editor
                 _stylesInitialized = false;
                 ShaderHookRegistry.Reinitialize();
                 ShaderTagProcessorRegistry.Reinitialize();
+                ShaderPassInjectorRegistry.Reinitialize();
                 RefreshData();
             }
             EditorGUILayout.EndHorizontal();
@@ -185,7 +189,8 @@ namespace FS.Shaders.Editor
             EditorGUILayout.LabelField("Tag Processors", _headerStyle);
             EditorGUILayout.LabelField(
                 "Tag processors activate when their tag is present in SubShader or Pass tags. " +
-                "They can inject properties, CBUFFER entries, modify passes, and queue new passes.",
+                "They modify existing passes, inject properties/CBUFFER entries, and provide " +
+                "template replacements for generated passes.",
                 _descriptionStyle);
             EditorGUILayout.Space(4);
             
@@ -205,14 +210,12 @@ namespace FS.Shaders.Editor
                 DrawField("Priority", proc.Priority.ToString());
                 DrawField("Type", proc.GetType().Name);
                 
-                // Show capabilities
+                // Show capabilities based on which methods are overridden
                 var caps = new List<string>();
-                // We can't call the methods without a context, but we can check if they're overridden
                 var type = proc.GetType();
                 if (IsMethodOverridden(type, "GetPropertiesEntries")) caps.Add("Properties");
                 if (IsMethodOverridden(type, "GetCBufferEntries")) caps.Add("CBUFFER");
                 if (IsMethodOverridden(type, "ModifyPass")) caps.Add("ModifyPass");
-                if (IsMethodOverridden(type, "InjectPasses")) caps.Add("InjectPasses");
                 if (IsMethodOverridden(type, "GetPassReplacements")) caps.Add("PassReplacements");
                 
                 if (caps.Count > 0)
@@ -228,7 +231,7 @@ namespace FS.Shaders.Editor
                 "1. Create a class inheriting ShaderTagProcessorBase\n" +
                 "2. Add [ShaderTagProcessor(\"TagName\", priority: N)] attribute\n" +
                 "3. Override desired stages: GetPropertiesEntries, GetCBufferEntries,\n" +
-                "   ModifyPass, InjectPasses, GetPassReplacements\n" +
+                "   ModifyPass, GetPassReplacements\n" +
                 "4. Enable in shader: Tags { \"TagName\" = \"On\" }",
                 _descriptionStyle);
             EditorGUILayout.EndVertical();
@@ -240,66 +243,90 @@ namespace FS.Shaders.Editor
         
         void DrawPassesTab()
         {
-            EditorGUILayout.LabelField("Generated Passes", _headerStyle);
+            EditorGUILayout.LabelField("Pass Injectors", _headerStyle);
             EditorGUILayout.LabelField(
-                "Passes are generated from templates and injected via [InjectBasePasses] or " +
-                "[InjectPass:PassName] markers in your shader.",
+                "Pass injectors define how to generate shader passes from templates. " +
+                "Activated by [InjectBasePasses] (all base passes) or [InjectPass:Name] (specific pass).",
                 _descriptionStyle);
             EditorGUILayout.Space(4);
             
-            // Base passes (currently hardcoded in PassGenerator)
-            var basePasses = new[]
+            if (_passInjectors == null || _passInjectors.Count == 0)
             {
-                ("ShadowCaster", "Renders shadow map depth. Supports vertex displacement and alpha clip hooks."),
-                ("DepthOnly", "Writes depth for the depth prepass. Supports all standard hooks."),
-                ("DepthNormals", "Writes depth and world-space normals. Adds normalWS if missing from structs."),
-                ("MotionVectors", "Outputs per-pixel motion for temporal effects. Adds previous frame position fields."),
-                ("Meta", "Used for lightmap baking and GI. Adds uv1/uv2 for lightmap coordinates."),
-            };
-            
-            EditorGUILayout.LabelField("Base Passes", _subHeaderStyle);
-            EditorGUILayout.LabelField(
-                "Injected via [InjectBasePasses] or individually via [InjectPass:Name].",
-                _descriptionStyle);
-            EditorGUILayout.Space(2);
-            
-            foreach (var (name, desc) in basePasses)
-            {
-                EditorGUILayout.BeginVertical(_cardStyle);
-                EditorGUILayout.LabelField(name, _subHeaderStyle);
-                EditorGUILayout.LabelField(desc, _descriptionStyle);
-                DrawField("Marker", $"[InjectPass:{name}]");
-                DrawField("Template", $"Templates/{name}.hlsl");
-                EditorGUILayout.EndVertical();
+                EditorGUILayout.HelpBox("No pass injectors registered.", MessageType.Info);
+                return;
             }
             
-            // Tag processor passes
-            EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("Tag Processor Passes", _subHeaderStyle);
-            EditorGUILayout.LabelField(
-                "Additional passes injected by tag processors when their tag is enabled.",
-                _descriptionStyle);
-            EditorGUILayout.Space(2);
-            
-            if (_tagProcessors != null)
+            // Base passes
+            var basePasses = _passInjectors.Where(p => p.IsBasePass).ToList();
+            if (basePasses.Count > 0)
             {
-                bool anyPassInjector = false;
-                foreach (var proc in _tagProcessors)
-                {
-                    if (IsMethodOverridden(proc.GetType(), "InjectPasses"))
-                    {
-                        anyPassInjector = true;
-                        EditorGUILayout.BeginVertical(_cardStyle);
-                        EditorGUILayout.LabelField(proc.TagName, _subHeaderStyle);
-                        DrawField("Source", proc.GetType().Name);
-                        DrawField("Activated by", $"Tags {{ \"{proc.TagName}\" = \"On\" }}");
-                        EditorGUILayout.EndVertical();
-                    }
-                }
+                EditorGUILayout.LabelField("Base Passes", _subHeaderStyle);
+                EditorGUILayout.LabelField(
+                    "Included in [InjectBasePasses]. Can also be used individually via [InjectPass:Name].",
+                    _descriptionStyle);
+                EditorGUILayout.Space(2);
                 
-                if (!anyPassInjector)
-                    EditorGUILayout.HelpBox("No tag processors currently inject passes.", MessageType.Info);
+                foreach (var pass in basePasses)
+                {
+                    DrawPassCard(pass);
+                }
             }
+            
+            // Feature passes
+            var featurePasses = _passInjectors.Where(p => !p.IsBasePass).ToList();
+            if (featurePasses.Count > 0)
+            {
+                EditorGUILayout.Space(8);
+                EditorGUILayout.LabelField("Feature Passes", _subHeaderStyle);
+                EditorGUILayout.LabelField(
+                    "Not included in [InjectBasePasses]. Activate individually via [InjectPass:Name].",
+                    _descriptionStyle);
+                EditorGUILayout.Space(2);
+                
+                foreach (var pass in featurePasses)
+                {
+                    DrawPassCard(pass);
+                }
+            }
+            
+            // How to add
+            EditorGUILayout.Space(8);
+            EditorGUILayout.BeginVertical(_cardStyle);
+            EditorGUILayout.LabelField("Adding a New Pass", _subHeaderStyle);
+            EditorGUILayout.LabelField(
+                "1. Create a template file: Templates/MyPass.hlsl\n" +
+                "2. Create a class inheriting ShaderPassInjector with [ShaderPass] attribute\n" +
+                "3. Override PassName and TemplateName (required)\n" +
+                "4. Optionally override: IsBasePass, GetPropertiesEntries, GetCBufferEntries,\n" +
+                "   GetStructOverrides, GetAdditionalReplacements\n" +
+                "5. Use [InjectPass:MyPass] in your shader",
+                _descriptionStyle);
+            EditorGUILayout.EndVertical();
+        }
+        
+        void DrawPassCard(ShaderPassInjector pass)
+        {
+            EditorGUILayout.BeginVertical(_cardStyle);
+            
+            EditorGUILayout.LabelField(pass.PassName, _subHeaderStyle);
+            
+            DrawField("Marker", $"[InjectPass:{pass.PassName}]");
+            DrawField("Template", $"Templates/{pass.TemplateName}.hlsl");
+            DrawField("Base Pass", pass.IsBasePass ? "Yes" : "No");
+            DrawField("Type", pass.GetType().Name);
+            
+            // Show capabilities
+            var caps = new List<string>();
+            var type = pass.GetType();
+            if (IsPassMethodOverridden(type, "GetPropertiesEntries")) caps.Add("Properties");
+            if (IsPassMethodOverridden(type, "GetCBufferEntries")) caps.Add("CBUFFER");
+            if (IsPassMethodOverridden(type, "GetStructOverrides")) caps.Add("StructOverrides");
+            if (IsPassMethodOverridden(type, "GetAdditionalReplacements")) caps.Add("AdditionalReplacements");
+            
+            if (caps.Count > 0)
+                DrawField("Overrides", string.Join(", ", caps));
+            
+            EditorGUILayout.EndVertical();
         }
         
         //=============================================================================
@@ -319,6 +346,13 @@ namespace FS.Shaders.Editor
             var method = type.GetMethod(methodName, 
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
             return method != null && method.DeclaringType != typeof(ShaderTagProcessorBase);
+        }
+        
+        static bool IsPassMethodOverridden(System.Type type, string methodName)
+        {
+            var method = type.GetMethod(methodName, 
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            return method != null && method.DeclaringType != typeof(ShaderPassInjector);
         }
     }
 }
