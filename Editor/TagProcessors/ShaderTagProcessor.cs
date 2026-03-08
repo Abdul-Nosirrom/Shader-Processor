@@ -420,6 +420,16 @@ namespace FS.Shaders.Editor
         }
         
         /// <summary>
+        /// Get all registered processors (regardless of which shader they apply to).
+        /// Used by documentation and editor tooling.
+        /// </summary>
+        public static IReadOnlyList<IShaderTagProcessor> GetAllProcessors()
+        {
+            Initialize();
+            return s_SortedProcessors;
+        }
+        
+        /// <summary>
         /// Get all processors that are enabled for this shader.
         /// </summary>
         public static IEnumerable<IShaderTagProcessor> GetEnabledProcessors(ShaderContext ctx)
