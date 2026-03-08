@@ -1,281 +1,26 @@
 # ShaderGen
 
-A Unity shader preprocessing system for URP that automatically generates auxiliary passes (ShadowCaster, DepthOnly, etc.) from a single Forward pass definition. Supports hook-based customization, tag processors for feature injection, and hardware tessellation.
+A Unity URP shader preprocessing system that automatically generates auxiliary passes from a single authored pass. Write your Forward pass, hook in your custom logic, and let ShaderGen handle the boilerplate. The goal is to get the convenience of surface shaders while staying in normal HLSL.
 
 ## Features
 
 - **Automatic Pass Generation**: Write your Forward pass once, get ShadowCaster, DepthOnly, DepthNormals, MotionVectors, and Meta passes generated automatically
-- **Hook System**: Define vertex displacement, interpolator transfer, and alpha clip functions that propagate to all passes
-- **Tag Processors**: Modular system for injecting features like outlines and tessellation via SubShader tags
-- **Struct Preservation**: Your custom Attributes and Interpolators are carried through to generated passes
-- **Custom Naming Support**: Works with any struct/function names, not just hardcoded conventions
+- **Hook System**: Define vertex displacement, interpolator transfer, alpha clip, and tessellation factor override functions that propagate to all generated passes
+- **Pass Injectors**: Data-driven pass definitions. Each pass is a small class + a template. Adding a new pass type requires zero pipeline changes
+- **Tag Processors**: Modular feature injection for things that modify existing passes (like tessellation)
+- **Hardware Tessellation**: Full tessellation pipeline with multiple modes, phong smoothing, and culling. Injected per-pass via tags
+- **Struct Preservation**: Works with any struct/function naming. Your `Attributes`/`Interpolators` (or `VIn`/`VOut` or whatever you call them) are carried through correctly
+- **HLSLINCLUDE Support**: Structs, CBUFFER, textures, and hook functions can live in HLSLINCLUDE and are handled correctly across all passes
+- **Editor Tooling**: Inspector shows parsed shader info, active passes, active tag processors, and detected hooks. Docs window (Tools/ShaderProcessor/Docs) shows all registered hooks, passes, and processors
 
 ## Installation
 
-1. Copy the `ShaderProcessing` folder into your Unity project's `Packages` directory
+1. Copy the package folder into your Unity project's `Packages` directory
 2. The package will be recognized as `com.abdulal.shaderprocessor`
 
 ## Quick Start
 
-Add `"ShaderGen" = "True"` to your Forward pass tags:
-
-```hlsl
-Pass
-{
-    Name "Forward"
-    Tags
-    {
-        "LightMode" = "UniversalForward"
-        "ShaderGen" = "True"
-    }
-    
-    HLSLPROGRAM
-    #pragma vertex Vert
-    #pragma fragment Frag
-    
-    // Your shader code...
-    
-    ENDHLSL
-}
-
-[InjectBasePasses]
-```
-
-The `[InjectBasePasses]` marker tells ShaderGen where to insert the generated passes.
-
-### Individual Pass Injection
-
-If you only need specific passes instead of all of them, use individual markers:
-
-```hlsl
-Pass
-{
-    Name "Forward"
-    Tags { "LightMode" = "UniversalForward" "ShaderGen" = "True" }
-    // ...
-}
-
-[InjectPass:ShadowCaster]
-[InjectPass:DepthOnly]
-```
-
-Available passes:
-- `[InjectPass:ShadowCaster]` - Shadow casting
-- `[InjectPass:DepthOnly]` - Depth prepass
-- `[InjectPass:DepthNormals]` - Depth and normals (for SSAO, etc.)
-- `[InjectPass:MotionVectors]` - Motion vector generation
-- `[InjectPass:Meta]` - Lightmap baking
-
-Use `[InjectBasePasses]` to inject all of them at once, or pick only the ones you need.
-
-## Hook System
-
-Hooks let you define functions that automatically propagate to all generated passes.
-
-### Available Hooks
-
-| Hook | Purpose | Signature |
-|------|---------|-----------|
-| `vertexDisplacement` | Modify vertex position/attributes before transforms | `void FuncName(inout Attributes attr)` |
-| `interpolatorTransfer` | Transfer custom data from vertex to fragment | `void FuncName(Attributes input, inout Interpolators output)` |
-| `alphaClip` | Perform alpha testing in fragment | `void FuncName(Interpolators input)` |
-
-### Usage
-
-Declare hooks with pragma directives:
-
-```hlsl
-#pragma vertexDisplacement ApplyDisplacement
-#pragma interpolatorTransfer TransferCustomData
-#pragma alphaClip PerformAlphaClip
-
-void ApplyDisplacement(inout Attributes attr)
-{
-    float height = SampleHeight(attr.uv);
-    attr.positionOS.xyz += attr.normalOS * height * _Strength;
-}
-
-void TransferCustomData(Attributes input, inout Interpolators output)
-{
-    output.vertexColor = input.color;
-    output.customData = ComputeCustomData(input);
-}
-
-void PerformAlphaClip(Interpolators input)
-{
-    #ifdef _ALPHATEST_ON
-    clip(SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv).a - _Cutoff);
-    #endif
-}
-```
-
-## Tag Processors
-
-Tag processors inject features based on SubShader tags. Built-in processors:
-
-### Outlines
-
-```hlsl
-Tags
-{
-    "Outlines" = "On"
-}
-```
-
-Automatically injects:
-- Outline properties (`_OutlineWidth`, `_OutlineColor`)
-- CBUFFER entries
-- Outline pass with front-face culling
-
-### Tessellation
-
-```hlsl
-Tags
-{
-    "Tessellation" = "On"
-}
-```
-
-Automatically injects:
-- Tessellation properties and material drawer
-- Hull and Domain shaders into all passes
-- Multiple tessellation modes (Uniform, EdgeLength, Distance, EdgeDistance)
-- Phong smoothing support
-- Frustum and backface culling options
-
-Tessellation properties are controlled via a custom material drawer that shows/hides options based on the enabled mode.
-
-## File Structure
-
-```
-ShaderProcessing/
-├── Editor/
-│   ├── Core/
-│   │   ├── ShaderContext.cs       # Shared state during processing
-│   │   ├── ShaderParser.cs        # Parses shader source
-│   │   ├── ShaderProcessor.cs     # Main processing pipeline
-│   │   └── FSShaderImporter.cs    # ScriptedImporter integration
-│   ├── Generation/
-│   │   ├── TemplateEngine.cs      # Template loading and processing
-│   │   ├── PassGenerator.cs       # Generates auxiliary passes
-│   │   ├── StructGenerator.cs     # Generates Attributes/Interpolators
-│   │   └── HookProcessor.cs       # Processes hook functions
-│   ├── TagProcessors/
-│   │   ├── ShaderTagProcessor.cs  # Base class and registry
-│   │   ├── OutlinesProcessor.cs   # Outline feature injection
-│   │   └── TessellationProcessor.cs # Tessellation injection
-│   └── Templates/
-│       ├── ShadowCaster.hlsl
-│       ├── DepthOnly.hlsl
-│       ├── DepthNormals.hlsl
-│       ├── MotionVectors.hlsl
-│       ├── Meta.hlsl
-│       ├── Outline.hlsl
-│       └── Tessellation.hlsl
-└── Examples/
-    ├── Basic.shader
-    ├── WithOutlines.shader
-    ├── AllHooks.shader
-    ├── CustomNaming.shader
-    └── FullFeatured.shader
-```
-
-## Processing Pipeline
-
-1. **ShaderPreprocessor** detects `"ShaderGen" = "True"` tag and sets the custom importer
-2. **FSShaderImporter** triggers on import and calls ShaderProcessor
-3. **ShaderParser** extracts structs, functions, hooks, and tags from source
-4. **Tag Processors** run in priority order:
-   - `InjectProperties()` - Add material properties
-   - `InjectCBuffer()` - Add CBUFFER entries
-   - `ModifyMainPass()` - Modify the Forward pass
-   - `InjectPasses()` - Queue additional passes
-5. **PassGenerator** processes `[InjectBasePasses]` and individual `[InjectPass:Name]` markers
-6. **TemplateEngine** loads templates and applies replacements including tag processor contributions
-
-## Template Markers
-
-Templates use `{{MARKER}}` syntax for replacements:
-
-| Marker | Description |
-|--------|-------------|
-| `{{ATTRIBUTES}}` | Generated Attributes struct |
-| `{{INTERPOLATORS}}` | Generated Interpolators struct |
-| `{{CBUFFER}}` | Material CBUFFER content |
-| `{{TEXTURES}}` | Texture/sampler declarations |
-| `{{FORWARD_CONTENT}}` | Pragmas and helpers from Forward pass |
-| `{{HOOK_FUNCTIONS}}` | Rewritten hook functions |
-| `{{VERTEX_PRAGMA}}` | Vertex shader pragma (may be overridden by tessellation) |
-| `{{TESSELLATION_CODE}}` | Tessellation shaders (when enabled) |
-
-## Creating Custom Tag Processors
-
-```csharp
-[ShaderTagProcessor("MyFeature", priority: 10)]
-public class MyFeatureProcessor : ShaderTagProcessorBase
-{
-    public override string TagName => "MyFeature";
-    public override int Priority => 10;
-    
-    public override void InjectProperties(ShaderContext ctx)
-    {
-        if (PropertyExists(ctx, "_MyProperty")) return;
-        InjectPropertiesContent(ctx, "_MyProperty(\"My Property\", Float) = 1");
-    }
-    
-    public override void InjectCBuffer(ShaderContext ctx)
-    {
-        if (CBufferEntryExists(ctx, "_MyProperty")) return;
-        InjectCBufferContent(ctx, "float _MyProperty;");
-    }
-    
-    public override void ModifyMainPass(ShaderContext ctx)
-    {
-        // Modify the Forward pass source
-    }
-    
-    public override void InjectPasses(ShaderContext ctx)
-    {
-        // Queue additional passes
-        ctx.QueuedPasses.Add(new QueuedPass { /* ... */ });
-    }
-    
-    public override Dictionary<string, string> GetPassReplacements(ShaderContext ctx, string passName)
-    {
-        // Provide replacements for generated passes
-        return new Dictionary<string, string>
-        {
-            ["MY_MARKER"] = "replacement content"
-        };
-    }
-}
-```
-
-## Tessellation Details
-
-The tessellation system supports:
-
-**Modes**
-- Uniform: Fixed tessellation factor
-- Edge Length: Screen-space edge length targeting
-- Distance: Camera distance based falloff
-- Edge Distance: Combination of edge length and distance
-
-**Features**
-- Phong smoothing for curved surfaces
-- Frustum culling to skip offscreen patches
-- Backface culling to skip away-facing patches
-
-**Dynamic Field Handling**
-
-The tessellation system dynamically reads your Attributes struct and generates matching `TessControlPoint` structs. All fields (position, normal, tangent, UVs, vertex colors, etc.) are properly carried through the tessellation stage with appropriate interpolation:
-
-- POSITION: Barycentric interpolation with w=1
-- NORMAL: Barycentric interpolation + normalize
-- TANGENT: Barycentric interpolation + normalize, preserve w
-- Everything else: Simple barycentric interpolation
-
-## Example Shader
+Add `"ShaderGen" = "True"` to your Forward pass tags and place `[InjectBasePasses]` where you want the generated passes to appear:
 
 ```hlsl
 Shader "MyShader"
@@ -284,8 +29,6 @@ Shader "MyShader"
     {
         _BaseMap("Albedo", 2D) = "white" {}
         _BaseColor("Color", Color) = (1,1,1,1)
-        _DisplacementMap("Displacement", 2D) = "gray" {}
-        _DisplacementStrength("Strength", Range(0, 1)) = 0.1
     }
 
     SubShader
@@ -294,7 +37,6 @@ Shader "MyShader"
         {
             "RenderType" = "Opaque"
             "RenderPipeline" = "UniversalPipeline"
-            "Tessellation" = "On"
         }
 
         HLSLINCLUDE
@@ -303,19 +45,15 @@ Shader "MyShader"
         CBUFFER_START(UnityPerMaterial)
             float4 _BaseMap_ST;
             float4 _BaseColor;
-            float _DisplacementStrength;
         CBUFFER_END
 
         TEXTURE2D(_BaseMap);
         SAMPLER(sampler_BaseMap);
-        TEXTURE2D(_DisplacementMap);
-        SAMPLER(sampler_DisplacementMap);
 
         struct Attributes
         {
             float4 positionOS : POSITION;
             float3 normalOS : NORMAL;
-            float4 tangentOS : TANGENT;
             float2 uv : TEXCOORD0;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
@@ -323,8 +61,8 @@ Shader "MyShader"
         struct Interpolators
         {
             float4 positionCS : SV_POSITION;
+            float3 normalWS : NORMAL;
             float2 uv : TEXCOORD0;
-            float3 normalWS : TEXCOORD1;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
         ENDHLSL
@@ -343,25 +81,14 @@ Shader "MyShader"
             #pragma fragment Frag
             #pragma multi_compile_instancing
 
-            #pragma vertexDisplacement ApplyDisplacement
-
-            void ApplyDisplacement(inout Attributes attr)
-            {
-                float h = SAMPLE_TEXTURE2D_LOD(_DisplacementMap, sampler_DisplacementMap, attr.uv, 0).r;
-                attr.positionOS.xyz += attr.normalOS * (h - 0.5) * _DisplacementStrength;
-            }
-
             Interpolators Vert(Attributes input)
             {
                 Interpolators output = (Interpolators)0;
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_TRANSFER_INSTANCE_ID(input, output);
-                
-                ApplyDisplacement(input);
-                
                 output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
-                output.uv = TRANSFORM_TEX(input.uv, _BaseMap);
                 output.normalWS = TransformObjectToWorldNormal(input.normalOS);
+                output.uv = TRANSFORM_TEX(input.uv, _BaseMap);
                 return output;
             }
 
@@ -374,14 +101,193 @@ Shader "MyShader"
 
         [InjectBasePasses]
     }
-
     Fallback "Hidden/Universal Render Pipeline/FallbackError"
 }
+```
+
+That's it. ShaderGen parses your Forward pass, extracts your structs and material data, and generates all the auxiliary passes URP needs.
+
+### Individual Pass Injection
+
+If you only need specific passes:
+
+```hlsl
+[InjectPass:ShadowCaster]
+[InjectPass:DepthOnly]
+```
+
+Available base passes: `ShadowCaster`, `DepthOnly`, `DepthNormals`, `MotionVectors`, `Meta`.
+
+Feature passes (not included in `[InjectBasePasses]`): `Outline`.
+
+## Hooks
+
+Hooks let you define functions that automatically propagate to all generated passes. Declare them with pragma directives in your pass, and ShaderGen extracts the function body, rewrites struct names per generated pass, and injects it with the appropriate call.
+
+Hook function bodies can live either in the pass (next to the pragma) or in HLSLINCLUDE (shared across passes). Either way works.
+
+### Built-in Hooks
+
+| Hook | Purpose | Signature |
+|------|---------|-----------|
+| `vertexDisplacement` | Modify vertex position/attributes before transforms | `void Func(inout Attributes input)` |
+| `interpolatorTransfer` | Transfer custom data from vertex to fragment | `void Func(Attributes input, inout Interpolators output)` |
+| `alphaClip` | Alpha testing in fragment shader | `void Func(Interpolators input)` |
+| `tessFactorOverride` | Override tessellation factor per vertex | `void Func(inout float factor, Attributes input)` |
+
+### Usage
+
+```hlsl
+#pragma vertexDisplacement ApplyHeight
+#pragma alphaClip DoClip
+
+void ApplyHeight(inout Attributes input)
+{
+    float h = SAMPLE_TEXTURE2D_LOD(_HeightMap, sampler_HeightMap, input.uv, 0).r;
+    input.positionOS.xyz += input.normalOS * h * _HeightScale;
+}
+
+void DoClip(Interpolators input)
+{
+    clip(SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv).a - _Cutoff);
+}
+```
+
+### Adding Custom Hooks
+
+Create a class inheriting `ShaderHookDefinition` with the `[ShaderHook]` attribute, then place a `{{MARKER}}` in your template:
+
+```csharp
+[ShaderHook]
+public class MyCustomHook : ShaderHookDefinition
+{
+    public override string PragmaName => "myHook";
+    public override string Define => "FS_MY_HOOK";
+    public override string CallPattern => "{FuncName}(input);";
+    public override string TemplateMarker => "MY_HOOK_CALL";
+}
+```
+
+No pipeline code changes needed. The hook is discovered via TypeCache and works immediately.
+
+## Pass Injectors
+
+Each generated pass is defined by a `ShaderPassInjector` class that specifies its template and any material data it needs. Base passes are included in `[InjectBasePasses]`, feature passes are activated individually via `[InjectPass:Name]`.
+
+### Adding Custom Passes
+
+```csharp
+[ShaderPass]
+public class MyCustomPass : ShaderPassInjector
+{
+    public override string PassName => "MyCustom";
+    public override string TemplateName => "MyCustom";  // loads Templates/MyCustom.hlsl
+    public override bool IsBasePass => false;            // not in [InjectBasePasses]
+
+    // Optional: declare properties this pass needs
+    public override string GetPropertiesEntries(ShaderContext ctx)
+    {
+        if (ctx.PropertyExists("_MyProperty")) return null;
+        return "_MyProperty(\"My Property\", Float) = 1";
+    }
+
+    // Optional: declare CBUFFER entries
+    public override string GetCBufferEntries(ShaderContext ctx)
+    {
+        if (ctx.CBufferEntryExists("_MyProperty")) return null;
+        return "float _MyProperty;";
+    }
+}
+```
+
+Then use `[InjectPass:MyCustom]` in your shader. Properties and CBUFFER entries are auto-injected.
+
+## Tag Processors
+
+Tag processors modify existing passes based on SubShader or pass-level tags. They handle things like tessellation where you need to rewrite the vertex entry point and inject hull/domain shaders into every pass.
+
+### Tessellation
+
+```hlsl
+// SubShader level: applies to ALL passes
+Tags { "Tessellation" = "On" }
+
+// Or pass level: applies to THAT pass only
+Pass { Tags { "Tessellation" = "On" } }
+```
+
+Tessellation automatically injects properties, CBUFFER entries, a custom material drawer, and hull/domain shaders. Supports multiple modes (Uniform, EdgeLength, Distance, EdgeDistance), Phong smoothing, frustum culling, and backface culling.
+
+The tessellation system dynamically reads your Attributes struct and generates matching TessControlPoint structs. All fields are carried through with appropriate interpolation (normalize for normals/tangents, barycentric for everything else).
+
+### Adding Custom Tag Processors
+
+```csharp
+[ShaderTagProcessor("MyFeature", priority: 100)]
+public class MyFeatureProcessor : ShaderTagProcessorBase
+{
+    public override string TagName => "MyFeature";
+
+    public override string GetPropertiesEntries(ShaderContext ctx) => /* ... */;
+    public override string GetCBufferEntries(ShaderContext ctx) => /* ... */;
+    public override void ModifyPass(ShaderContext ctx, PassInfo pass) { /* ... */ }
+    public override Dictionary<string, string> GetPassReplacements(ShaderContext ctx, string passName) => /* ... */;
+}
+```
+
+## Processing Pipeline
+
+```
+1. ShaderParser.Parse()           -- Extract structs, CBUFFER, textures, hooks, passes
+2. PassInjectorRegistry.Collect() -- Gather material data from active pass injectors
+3. TagProcessorRegistry.Process() -- Run tag processors (properties, CBUFFER, ModifyPass)
+4. ProcessPassMarkers()           -- Generate and insert passes from [Inject] markers
+5. Validate()                     -- Check for missing structs/semantics
+```
+
+Everything is discovered via TypeCache at editor startup. Hooks, passes, and tag processors are all registered automatically. The Docs window (Tools/ShaderProcessor/Docs) shows everything that's registered.
+
+## File Structure
+
+```
+Editor/
+├── Core/
+│   ├── ShaderContext.cs           # Shared state during processing
+│   ├── ShaderParser.cs            # Parses shader source
+│   ├── ShaderProcessor.cs         # Main processing pipeline
+│   └── FSShaderImporter.cs        # ScriptedImporter + inspector
+├── Generation/
+│   ├── TemplateEngine.cs          # Template loading and marker replacement
+│   ├── StructGenerator.cs         # Generates pass-specific structs
+│   └── HookProcessor.cs           # Extracts and rewrites hook functions
+├── PassInjectors/
+│   ├── ShaderPassInjector.cs      # Base class + [ShaderPass] attribute
+│   ├── ShaderPassInjectorRegistry.cs  # Discovery + generation
+│   └── BuiltInPasses.cs           # ShadowCaster, DepthOnly, DepthNormals, etc.
+├── ShaderHooks/
+│   ├── ShaderHookDefinition.cs    # Base class + built-in hooks
+│   └── ShaderHookRegistry.cs      # TypeCache discovery
+├── TagProcessors/
+│   ├── ShaderTagProcessor.cs      # Interface, base class, registry
+│   └── TessellationProcessor.cs   # Tessellation injection
+├── MaterialDrawers/
+│   └── TessellationParameters.cs  # Custom material inspector for tess settings
+├── ShaderProcessorDocsWindow.cs   # Tools/ShaderProcessor/Docs editor window
+└── Templates/
+    ├── ShadowCaster.hlsl
+    ├── DepthOnly.hlsl
+    ├── DepthNormals.hlsl
+    ├── MotionVectors.hlsl
+    ├── Meta.hlsl
+    ├── Outline.hlsl
+    └── Tessellation.hlsl
 ```
 
 ## Notes
 
 - The system uses Unity's ScriptedImporter, so shader changes trigger automatic reimport
-- Generated passes appear in the imported shader asset, not the source file
+- Generated passes appear in the imported shader asset, not in the source file
+- Use "Show Processed Shader" in the inspector to see the full generated output
 - Tag processors run in priority order (lower numbers first)
 - Tessellation requires hardware support (DX11+, Metal, Vulkan)
+- Hooks in HLSLINCLUDE are supported. The system extracts the body, rewrites struct names per pass, and prefixes function names to avoid collisions with the HLSLINCLUDE originals

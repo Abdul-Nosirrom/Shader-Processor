@@ -185,8 +185,8 @@ namespace FS.Shaders.Editor
                 replacements["TEXTURES"] = "";
             }
             
-            // Hook functions with rewritten struct names
-            replacements["HOOK_FUNCTIONS"] = HookProcessor.GenerateHookFunctions(ctx, attrName, interpName);
+            // Hook functions with rewritten struct names and prefixed function names
+            replacements["HOOK_FUNCTIONS"] = HookProcessor.GenerateHookFunctions(ctx, attrName, interpName, passName);
             
             // Hook feature defines
             replacements["HOOK_DEFINES"] = GenerateHookDefines(ctx);
@@ -194,7 +194,7 @@ namespace FS.Shaders.Editor
             // Hook calls (with #ifdef guards) — one per registered hook
             foreach (var hook in ShaderHookRegistry.All)
             {
-                replacements[hook.TemplateMarker] = GenerateHookCall(ctx, hook);
+                replacements[hook.TemplateMarker] = GenerateHookCall(ctx, hook, passName);
             }
             
             // Default vertex pragma (tag processors can override)
@@ -229,16 +229,17 @@ namespace FS.Shaders.Editor
         /// Add hook-related replacements to a dictionary.
         /// Call this from tag processors that process their own templates and need hook support.
         /// Populates HOOK_DEFINES, HOOK_FUNCTIONS, and all registered hook call markers.
+        /// Pass passName to prefix function names (avoids collision with HLSLINCLUDE versions).
         /// </summary>
         public static void AddHookReplacements(Dictionary<string, string> replacements,
-            ShaderContext ctx, string attrName, string interpName)
+            ShaderContext ctx, string attrName, string interpName, string passName = "")
         {
             replacements["HOOK_DEFINES"] = GenerateHookDefines(ctx);
-            replacements["HOOK_FUNCTIONS"] = HookProcessor.GenerateHookFunctions(ctx, attrName, interpName);
+            replacements["HOOK_FUNCTIONS"] = HookProcessor.GenerateHookFunctions(ctx, attrName, interpName, passName);
             
             foreach (var hook in ShaderHookRegistry.All)
             {
-                replacements[hook.TemplateMarker] = GenerateHookCall(ctx, hook);
+                replacements[hook.TemplateMarker] = GenerateHookCall(ctx, hook, passName);
             }
         }
         
@@ -340,13 +341,20 @@ CBUFFER_END";
         
         /// <summary>
         /// Generate a guarded hook call for a template marker.
+        /// When passName is provided, the function name is prefixed to match the renamed
+        /// version in HOOK_FUNCTIONS (e.g., "HeightDisplace" → "DepthOnlyHeightDisplace").
         /// Returns empty string if the hook is not active for this shader.
         /// </summary>
-        static string GenerateHookCall(ShaderContext ctx, ShaderHookDefinition hook)
+        static string GenerateHookCall(ShaderContext ctx, ShaderHookDefinition hook, string passName = "")
         {
             if (!ctx.Hooks.IsActive(hook.PragmaName)) return "";
             
             string funcName = ctx.Hooks.GetFunctionName(hook.PragmaName);
+            
+            // Prefix with pass name to match renamed function in HOOK_FUNCTIONS
+            if (!string.IsNullOrEmpty(passName))
+                funcName = passName + funcName;
+            
             string call = hook.CallPattern.Replace("{FuncName}", funcName);
             
             return $@"#ifdef {hook.Define}

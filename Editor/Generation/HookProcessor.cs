@@ -15,8 +15,12 @@ namespace FS.Shaders.Editor
         
         /// <summary>
         /// Generate all hook functions with struct names rewritten for the target pass.
+        /// When passName is provided, function names are prefixed (e.g., "HeightDisplace" →
+        /// "DepthOnlyHeightDisplace") to avoid collisions with HLSLINCLUDE versions that
+        /// share the same name but use the original struct types.
         /// </summary>
-        public static string GenerateHookFunctions(ShaderContext ctx, string attrName, string interpName)
+        public static string GenerateHookFunctions(ShaderContext ctx, string attrName, string interpName,
+            string passName = "")
         {
             var sb = new StringBuilder();
             
@@ -28,6 +32,18 @@ namespace FS.Shaders.Editor
                 
                 string rewritten = RewriteStructNames(entry.Value.FunctionBody,
                     ctx.AttributesStructName, attrName, ctx.InterpolatorsStructName, interpName);
+                
+                // Prefix function name to avoid collision with HLSLINCLUDE version.
+                // HLSLINCLUDE functions are visible in all passes — if we emit a version with
+                // rewritten struct types but the same name, HLSL can't resolve the overload
+                // because structurally identical structs are treated as interchangeable.
+                if (!string.IsNullOrEmpty(passName))
+                {
+                    string prefixedName = passName + entry.Value.FunctionName;
+                    rewritten = Regex.Replace(rewritten,
+                        $@"\b{Regex.Escape(entry.Value.FunctionName)}\b", prefixedName);
+                }
+                
                 sb.AppendLine(rewritten);
                 sb.AppendLine();
             }

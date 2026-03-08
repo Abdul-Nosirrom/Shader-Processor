@@ -70,7 +70,7 @@ namespace FS.Shaders.Editor
                 ["DOMAIN_INTERPOLATION_PASSTHROUGH"] = fieldGeneration.DomainInterpolationPassthrough,
             };
             
-            TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName);
+            TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName, pass.Name ?? "");
 
             string tessCode = TemplateEngine.Process(template, tessReplacements);
             
@@ -142,7 +142,7 @@ namespace FS.Shaders.Editor
                 ["DOMAIN_INTERPOLATION_PASSTHROUGH"] = fieldGeneration.DomainInterpolationPassthrough,
             };
 
-            TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName);
+            TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName, passName);
             
             string tessCode = TemplateEngine.Process(template, tessReplacements);
             
