@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEngine;
 
 namespace FS.Shaders.Editor
@@ -26,22 +27,26 @@ namespace FS.Shaders.Editor
             float _TessellationMaxDist;
             float _TessellationEdgeLength;
             float _PhongStrength;";
-                
-        public override void InjectProperties(ShaderContext ctx)
+        
+        //=============================================================================
+        // Declarative API - System handles injection
+        //=============================================================================
+        
+        public override string GetPropertiesEntries(ShaderContext ctx)
         {
-            if (PropertyExists(ctx, "_Tessellation")) return;
-            InjectPropertiesContent(ctx, TessellationProperties);
+            if (PropertyExists(ctx, "_Tessellation")) return null;
+            return TessellationProperties;
         }
         
-        public override void InjectCBuffer(ShaderContext ctx)
+        public override string GetCBufferEntries(ShaderContext ctx)
         {
-            if (CBufferEntryExists(ctx, "_TessellationFactor")) return;
-            InjectCBufferContent(ctx, TessellationCBuffer);
+            if (CBufferEntryExists(ctx, "_TessellationFactor")) return null;
+            return TessellationCBuffer;
         }
         
-        public override void ModifyMainPass(ShaderContext ctx)
+        public override void ModifyPass(ShaderContext ctx, PassInfo pass)
         {
-            string vertexFunc = ctx.ForwardVertexFunctionName ?? "Vert";
+            string vertexFunc = pass.VertexFunctionName ?? "Vert";
             
             string template = TemplateEngine.LoadTemplate("Tessellation");
             if (string.IsNullOrEmpty(template)) return;
@@ -65,21 +70,27 @@ namespace FS.Shaders.Editor
             
             string tessCode = TemplateEngine.Process(template, tessReplacements);
             
-            // Find the Forward pass HLSLPROGRAM block
+            // Find this specific pass in the source using its indices
+            string passName = pass.Name ?? "";
             var passMatch = System.Text.RegularExpressions.Regex.Match(
                 ctx.ProcessedSource,
-                $@"(Pass\s*\{{\s*Name\s+""(?:Forward|UniversalForward)"".*?HLSLPROGRAM)(.*?)(ENDHLSL)",
+                $@"(Pass\s*\{{\s*Name\s+""{Regex.Escape(passName)}"".*?HLSLPROGRAM)(.*?)(ENDHLSL)",
                 System.Text.RegularExpressions.RegexOptions.Singleline
             );
             
-            if (!passMatch.Success) return;
+            if (!passMatch.Success)
+            {
+                // Try matching by position if name match failed
+                Debug.LogWarning($"[TessellationProcessor] Could not find pass '{passName}' by name, skipping.");
+                return;
+            }
             
             string hlslContent = passMatch.Groups[2].Value;
             
             // Replace vertex pragma
             string newHlslContent = System.Text.RegularExpressions.Regex.Replace(
                 hlslContent,
-                $@"#pragma\s+vertex\s+{vertexFunc}\b",
+                $@"#pragma\s+vertex\s+{Regex.Escape(vertexFunc)}\b",
                 "#pragma vertex TessVertex"
             );
             
@@ -96,6 +107,8 @@ namespace FS.Shaders.Editor
                 passMatch.Value,
                 passMatch.Groups[1].Value + newHlslContent + passMatch.Groups[3].Value
             );
+            
+            Debug.Log($"[TessellationProcessor] Injected tessellation into pass '{passName}'");
         }
         
         public override Dictionary<string, string> GetPassReplacements(ShaderContext ctx, string passName)

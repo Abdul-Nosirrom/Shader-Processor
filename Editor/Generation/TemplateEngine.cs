@@ -285,11 +285,23 @@ namespace FS.Shaders.Editor
         
         static string GenerateCBuffer(ShaderContext ctx)
         {
-            if (string.IsNullOrEmpty(ctx.CBufferContent))
+            // Combine parsed CBUFFER content with processor additions
+            string allContent = (ctx.CBufferContent ?? "") + (ctx.ProcessorCBufferEntries ?? "");
+            
+            if (string.IsNullOrWhiteSpace(allContent))
                 return "";
             
+            // Normalize indentation
+            var sb = new System.Text.StringBuilder();
+            foreach (var line in allContent.Split('\n'))
+            {
+                string trimmed = line.Trim();
+                if (!string.IsNullOrEmpty(trimmed))
+                    sb.AppendLine("    " + trimmed);
+            }
+            
             return $@"CBUFFER_START(UnityPerMaterial)
-{ctx.CBufferContent}
+{sb.ToString().TrimEnd()}
 CBUFFER_END";
         }
         

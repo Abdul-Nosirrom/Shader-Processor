@@ -30,16 +30,16 @@ namespace FS.Shaders.Editor
         // Processing Stages
         //=============================================================================
         
-        public override void InjectProperties(ShaderContext ctx)
+        public override string GetPropertiesEntries(ShaderContext ctx)
         {
-            if (PropertyExists(ctx, "_OutlineWidth")) return;
-            InjectPropertiesContent(ctx, OutlineProperties);
+            if (PropertyExists(ctx, "_OutlineWidth")) return null;
+            return OutlineProperties;
         }
         
-        public override void InjectCBuffer(ShaderContext ctx)
+        public override string GetCBufferEntries(ShaderContext ctx)
         {
-            if (CBufferEntryExists(ctx, "_OutlineWidth")) return;
-            InjectCBufferContent(ctx, OutlineCBuffer);
+            if (CBufferEntryExists(ctx, "_OutlineWidth")) return null;
+            return OutlineCBuffer;
         }
         
         public override void InjectPasses(ShaderContext ctx)

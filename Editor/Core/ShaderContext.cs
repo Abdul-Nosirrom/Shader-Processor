@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace FS.Shaders.Editor
@@ -83,13 +84,23 @@ namespace FS.Shaders.Editor
         /// <summary>All parsed passes.</summary>
         public List<PassInfo> Passes = new List<PassInfo>();
         
-        /// <summary>Reference to the Forward pass.</summary>
-        public PassInfo ForwardPass;
+        /// <summary>
+        /// The reference pass used for content copying (structs, hooks, etc.).
+        /// This is the pass with "ShaderGen" = "True", or fallback to UniversalForward/first pass.
+        /// </summary>
+        public PassInfo ReferencePass;
         
-        /// <summary>Vertex function name in Forward pass.</summary>
+        /// <summary>Alias for ReferencePass (legacy compatibility).</summary>
+        public PassInfo ForwardPass
+        {
+            get => ReferencePass;
+            set => ReferencePass = value;
+        }
+        
+        /// <summary>Vertex function name in reference pass.</summary>
         public string ForwardVertexFunctionName;
         
-        /// <summary>Fragment function name in Forward pass.</summary>
+        /// <summary>Fragment function name in reference pass.</summary>
         public string ForwardFragmentFunctionName;
         
         // Where was ShaderGen tag found?
@@ -116,6 +127,16 @@ namespace FS.Shaders.Editor
         
         /// <summary>Feature flags set by tag processors.</summary>
         public HashSet<string> EnabledFeatures = new HashSet<string>();
+        
+        //=============================================================================
+        // Processor Additions (collected from tag processors, preserved across re-parse)
+        //=============================================================================
+        
+        /// <summary>Property entries declared by tag processors.</summary>
+        public string ProcessorPropertiesEntries = "";
+        
+        /// <summary>CBUFFER entries declared by tag processors.</summary>
+        public string ProcessorCBufferEntries = "";
         
         //=============================================================================
         // Helpers
@@ -188,6 +209,24 @@ namespace FS.Shaders.Editor
         public int EndIndex;
         public string VertexFunctionName;
         public string FragmentFunctionName;
+        
+        /// <summary>All tags declared in this pass's Tags block.</summary>
+        public Dictionary<string, string> Tags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        
+        /// <summary>Check if this pass has a specific tag with a specific value.</summary>
+        public bool HasTag(string tagName, string tagValue)
+        {
+            return Tags.TryGetValue(tagName, out var val) && 
+                   val.Equals(tagValue, StringComparison.OrdinalIgnoreCase);
+        }
+        
+        /// <summary>Check if a tag is enabled (On/True/Enabled/1/Yes).</summary>
+        public bool IsTagEnabled(string tagName)
+        {
+            if (!Tags.TryGetValue(tagName, out var val)) return false;
+            val = val.Trim().ToLowerInvariant();
+            return val == "on" || val == "true" || val == "enabled" || val == "1" || val == "yes";
+        }
     }
     
     /// <summary>

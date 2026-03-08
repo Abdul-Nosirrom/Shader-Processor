@@ -213,10 +213,24 @@ namespace FS.Shaders.Editor
             if (nameMatch.Success)
                 pass.Name = nameMatch.Groups[1].Value;
             
-            // Parse LightMode
-            var lightModeMatch = Regex.Match(passSource, @"""LightMode""\s*=\s*""([^""]+)""");
-            if (lightModeMatch.Success)
-                pass.LightMode = lightModeMatch.Groups[1].Value;
+            // Parse all tags in the pass Tags block
+            var tagsMatch = Regex.Match(passSource, @"Tags\s*\{([^}]*)\}", RegexOptions.Singleline);
+            if (tagsMatch.Success)
+            {
+                string tagsContent = tagsMatch.Groups[1].Value;
+                var tagMatches = Regex.Matches(tagsContent, @"""(\w+)""\s*=\s*""([^""]+)""");
+                
+                foreach (Match tagMatch in tagMatches)
+                {
+                    string tagName = tagMatch.Groups[1].Value;
+                    string tagValue = tagMatch.Groups[2].Value;
+                    pass.Tags[tagName] = tagValue;
+                    
+                    // Also set LightMode for quick access
+                    if (tagName.Equals("LightMode", StringComparison.OrdinalIgnoreCase))
+                        pass.LightMode = tagValue;
+                }
+            }
             
             // Parse HLSLPROGRAM content
             var hlslMatch = Regex.Match(passSource, @"HLSLPROGRAM\s*(.*?)\s*ENDHLSL", RegexOptions.Singleline);
@@ -249,9 +263,9 @@ namespace FS.Shaders.Editor
             // Priority 1: Pass with "ShaderGen" = "True" tag
             foreach (var pass in ctx.Passes)
             {
-                if (HasPassTag(pass.FullSource, "ShaderGen", "True"))
+                if (pass.IsTagEnabled("ShaderGen"))
                 {
-                    ctx.ForwardPass = pass;
+                    ctx.ReferencePass = pass;
                     ctx.ForwardVertexFunctionName = pass.VertexFunctionName;
                     ctx.ForwardFragmentFunctionName = pass.FragmentFunctionName;
                     ctx.ShaderGenInPass = true;
@@ -272,7 +286,7 @@ namespace FS.Shaders.Editor
             {
                 if (pass.LightMode == "UniversalForward")
                 {
-                    ctx.ForwardPass = pass;
+                    ctx.ReferencePass = pass;
                     ctx.ForwardVertexFunctionName = pass.VertexFunctionName;
                     ctx.ForwardFragmentFunctionName = pass.FragmentFunctionName;
                     Debug.Log($"[ShaderGen] Using UniversalForward pass (SubShader fallback)");
@@ -283,24 +297,14 @@ namespace FS.Shaders.Editor
             // Priority 3: First pass (last resort)
             if (ctx.Passes.Count > 0)
             {
-                ctx.ForwardPass = ctx.Passes[0];
-                ctx.ForwardVertexFunctionName = ctx.ForwardPass.VertexFunctionName;
-                ctx.ForwardFragmentFunctionName = ctx.ForwardPass.FragmentFunctionName;
+                ctx.ReferencePass = ctx.Passes[0];
+                ctx.ForwardVertexFunctionName = ctx.ReferencePass.VertexFunctionName;
+                ctx.ForwardFragmentFunctionName = ctx.ReferencePass.FragmentFunctionName;
                 Debug.Log($"[ShaderGen] Using first pass as fallback");
             }
         }
 
-        static bool HasPassTag(string passSource, string tagName, string tagValue)
-        {
-            // Match within Tags { } block in the pass
-            var tagsMatch = Regex.Match(passSource, @"Tags\s*\{([^}]*)\}", RegexOptions.Singleline);
-            if (!tagsMatch.Success)
-                return false;
-            
-            string tagsContent = tagsMatch.Groups[1].Value;
-            string pattern = $@"[""']{Regex.Escape(tagName)}[""']\s*=\s*[""']{Regex.Escape(tagValue)}[""']";
-            return Regex.IsMatch(tagsContent, pattern, RegexOptions.IgnoreCase);
-        }
+        // HasPassTag is no longer needed - PassInfo.Tags handles this now
         
         //=============================================================================
         // Struct Parsing
