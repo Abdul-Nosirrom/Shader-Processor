@@ -183,9 +183,10 @@ namespace FS.Shaders.Editor
             {
                 EditorGUI.indentLevel++;
                 
-                DrawHookInfo("vertexDisplacement", m_ParsedContext.Hooks.VertexDisplacementName);
-                DrawHookInfo("interpolatorTransfer", m_ParsedContext.Hooks.InterpolatorTransferName);
-                DrawHookInfo("alphaClip", m_ParsedContext.Hooks.AlphaClipName);
+                foreach (var hook in ShaderHookRegistry.All)
+                {
+                    DrawHookInfo(hook.PragmaName, m_ParsedContext.Hooks.GetFunctionName(hook.PragmaName));
+                }
                 
                 if (m_ParsedContext.Hooks.HelperFunctions.Count > 0)
                 {

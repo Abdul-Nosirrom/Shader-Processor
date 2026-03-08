@@ -21,8 +21,6 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MotionVectorsCommon.hlsl"
     
-    {{FORWARD_CONTENT}}
-    
     // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
@@ -34,6 +32,12 @@ Pass
     // -------------------------------------------------------------------------
     {{ATTRIBUTES_STRUCT}}
     {{INTERPOLATORS_STRUCT}}
+
+    // -------------------------------------------------------------------------
+    // Shared body from MainPass
+    // -------------------------------------------------------------------------
+    {{FORWARD_CONTENT}}    
+
     
     // -------------------------------------------------------------------------
     // Hook Functions
@@ -86,8 +90,6 @@ Pass
         
         float3 prevPositionWS = mul(UNITY_PREV_MATRIX_M, float4(prevPosOS, 1.0)).xyz;
         output.prevPositionCS = mul(_PrevViewProjMatrix, float4(prevPositionWS, 1.0));
-        
-        output.{{TEXCOORD0}} = input.{{TEXCOORD0}};
         
         // Hook: transfer extra interpolators
         {{INTERPOLATOR_TRANSFER_CALL}}

@@ -191,10 +191,11 @@ namespace FS.Shaders.Editor
             // Hook feature defines
             replacements["HOOK_DEFINES"] = GenerateHookDefines(ctx);
             
-            // Hook calls (with #ifdef guards)
-            replacements["VERTEX_DISPLACEMENT_CALL"] = GenerateVertexDisplacementCall(ctx);
-            replacements["INTERPOLATOR_TRANSFER_CALL"] = GenerateInterpolatorTransferCall(ctx);
-            replacements["ALPHA_CLIP_CALL"] = GenerateAlphaClipCall(ctx);
+            // Hook calls (with #ifdef guards) — one per registered hook
+            foreach (var hook in ShaderHookRegistry.All)
+            {
+                replacements[hook.TemplateMarker] = GenerateHookCall(ctx, hook);
+            }
             
             // Default vertex pragma (tag processors can override)
             replacements["VERTEX_PRAGMA"] = $"#pragma vertex {passName}Vertex";
@@ -222,6 +223,23 @@ namespace FS.Shaders.Editor
             }
             
             return Process(template, replacements);
+        }
+        
+        /// <summary>
+        /// Add hook-related replacements to a dictionary.
+        /// Call this from tag processors that process their own templates and need hook support.
+        /// Populates HOOK_DEFINES, HOOK_FUNCTIONS, and all registered hook call markers.
+        /// </summary>
+        public static void AddHookReplacements(Dictionary<string, string> replacements,
+            ShaderContext ctx, string attrName, string interpName)
+        {
+            replacements["HOOK_DEFINES"] = GenerateHookDefines(ctx);
+            replacements["HOOK_FUNCTIONS"] = HookProcessor.GenerateHookFunctions(ctx, attrName, interpName);
+            
+            foreach (var hook in ShaderHookRegistry.All)
+            {
+                replacements[hook.TemplateMarker] = GenerateHookCall(ctx, hook);
+            }
         }
         
         //=============================================================================
@@ -253,30 +271,16 @@ namespace FS.Shaders.Editor
                 replacements["COLOR"] = "color";
             }
             
-            // Interpolators semantics - with fallback defaults
-            if (ctx.Interpolators != null)
-            {
-                replacements["SV_POSITION"] = ctx.Interpolators.GetField("SV_POSITION")?.Name ?? "positionCS";
-                
-                // Find normalWS field
-                string normalWSName = "normalWS";
-                foreach (var field in ctx.Interpolators.Fields)
-                {
-                    string nameLower = field.Name.ToLowerInvariant();
-                    if (nameLower.Contains("normal") && (nameLower.Contains("ws") || nameLower.Contains("world")))
-                    {
-                        normalWSName = field.Name;
-                        break;
-                    }
-                }
-                replacements["NORMAL_WS"] = normalWSName;
-            }
-            else
-            {
-                // Fallback defaults when struct not found
-                replacements["SV_POSITION"] = "positionCS";
-                replacements["NORMAL_WS"] = "normalWS";
-            }
+            // Interpolators - only SV_POSITION has a real semantic
+            replacements["SV_POSITION"] = ctx.Interpolators?.GetField("SV_POSITION")?.Name ?? "positionCS";
+            
+            // Normal needed for DepthNormals pass. We can't reliably pick up the interpolator
+            // field by name, so we ask shader authors to mark up interpolator semantics.
+            // For convenience, we try multiple semantic conventions (NORMAL, NORMALWS, NORMAL_WS).
+            replacements["NORMAL_WS"] = ctx.Interpolators?.GetField("NORMAL")?.Name
+                                     ?? ctx.Interpolators?.GetField("NORMALWS")?.Name
+                                     ?? ctx.Interpolators?.GetField("NORMAL_WS")?.Name
+                                     ?? "normalWS";
         }
         
         //=============================================================================
@@ -325,40 +329,28 @@ CBUFFER_END";
         {
             var sb = new System.Text.StringBuilder();
             
-            if (ctx.Hooks.HasVertexDisplacement)
-                sb.AppendLine("#define FS_VERTEX_DISPLACEMENT");
-            if (ctx.Hooks.HasInterpolatorTransfer)
-                sb.AppendLine("#define FS_INTERPOLATOR_TRANSFER");
-            if (ctx.Hooks.HasAlphaClip)
-                sb.AppendLine("#define FS_ALPHA_CLIP");
+            foreach (var hook in ShaderHookRegistry.All)
+            {
+                if (ctx.Hooks.IsActive(hook.PragmaName))
+                    sb.AppendLine($"#define {hook.Define}");
+            }
             
             return sb.ToString();
         }
         
-        static string GenerateVertexDisplacementCall(ShaderContext ctx)
+        /// <summary>
+        /// Generate a guarded hook call for a template marker.
+        /// Returns empty string if the hook is not active for this shader.
+        /// </summary>
+        static string GenerateHookCall(ShaderContext ctx, ShaderHookDefinition hook)
         {
-            if (!ctx.Hooks.HasVertexDisplacement) return "";
+            if (!ctx.Hooks.IsActive(hook.PragmaName)) return "";
             
-            return $@"#ifdef FS_VERTEX_DISPLACEMENT
-        {ctx.Hooks.VertexDisplacementName}(input);
-#endif";
-        }
-        
-        static string GenerateInterpolatorTransferCall(ShaderContext ctx)
-        {
-            if (!ctx.Hooks.HasInterpolatorTransfer) return "";
+            string funcName = ctx.Hooks.GetFunctionName(hook.PragmaName);
+            string call = hook.CallPattern.Replace("{FuncName}", funcName);
             
-            return $@"#ifdef FS_INTERPOLATOR_TRANSFER
-        {ctx.Hooks.InterpolatorTransferName}(input, output);
-#endif";
-        }
-        
-        static string GenerateAlphaClipCall(ShaderContext ctx)
-        {
-            if (!ctx.Hooks.HasAlphaClip) return "";
-            
-            return $@"#ifdef FS_ALPHA_CLIP
-        {ctx.Hooks.AlphaClipName}(input);
+            return $@"#ifdef {hook.Define}
+        {call}
 #endif";
         }
     }

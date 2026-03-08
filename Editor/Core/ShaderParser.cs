@@ -12,6 +12,15 @@ namespace FS.Shaders.Editor
     public static class ShaderParser
     {
         //=============================================================================
+        // Constants
+        //=============================================================================
+        
+        /// <summary>
+        /// Regex pattern matching a Pass declaration, handling optional inline comments.
+        /// </summary>
+        public const string PassPattern = @"Pass\s*(?://[^\n]*)?\s*(?:/\*.*?\*/)?\s*\{";
+        
+        //=============================================================================
         // Main Entry Point
         //=============================================================================
         
@@ -34,6 +43,22 @@ namespace FS.Shaders.Editor
             ParseTextures(ctx);
             ParseStructs(ctx);
             ParseHookPragmas(ctx);
+            
+            // Parse per-pass struct info (names + definitions from each pass's own vertex signature)
+            ParsePerPassStructs(ctx);
+        }
+        
+        /// <summary>
+        /// Re-parse all passes from the current ProcessedSource.
+        /// Call this after source modifications (e.g., CBuffer injection) to get fresh
+        /// PassInfo objects with correct HlslProgram content and indices.
+        /// </summary>
+        public static void ReparseAllPasses(ShaderContext ctx)
+        {
+            ctx.Passes.Clear();
+            ParseAllPasses(ctx);
+            FindForwardPass(ctx);
+            ParsePerPassStructs(ctx);
         }
         
         //=============================================================================
@@ -157,8 +182,8 @@ namespace FS.Shaders.Editor
         
         static void ParseAllPasses(ShaderContext ctx)
         {
-            string pattern = @"Pass\s*\{";
-            var matches = Regex.Matches(ctx.ProcessedSource, pattern);
+            ctx.Passes.Clear();
+            var matches = Regex.Matches(ctx.ProcessedSource, PassPattern);
             
             foreach (Match match in matches)
             {
@@ -303,8 +328,6 @@ namespace FS.Shaders.Editor
                 Debug.Log($"[ShaderGen] Using first pass as fallback");
             }
         }
-
-        // HasPassTag is no longer needed - PassInfo.Tags handles this now
         
         //=============================================================================
         // Struct Parsing
@@ -336,29 +359,83 @@ namespace FS.Shaders.Editor
     
             // Search both HLSLINCLUDE and Forward pass for the function signature
             string searchSource = "";
-    
             if (!string.IsNullOrEmpty(ctx.HlslIncludeBlock))
                 searchSource += ctx.HlslIncludeBlock + "\n";
-    
             if (!string.IsNullOrEmpty(ctx.ForwardPass.HlslProgram))
                 searchSource += ctx.ForwardPass.HlslProgram;
     
-            if (string.IsNullOrEmpty(searchSource))
-                return;
-    
-            // Look for: ReturnType FuncName(ParamType param)
-            var match = Regex.Match(searchSource,
-                $@"(\w+)\s+{Regex.Escape(ctx.ForwardVertexFunctionName)}\s*\(\s*(\w+)\s+\w+",
-                RegexOptions.Singleline);
-    
-            if (match.Success)
+            var names = DetectStructNamesFromSource(searchSource, ctx.ForwardVertexFunctionName);
+            if (names != null)
             {
-                ctx.InterpolatorsStructName = match.Groups[1].Value;
-                ctx.AttributesStructName = match.Groups[2].Value;
+                ctx.AttributesStructName = names.Value.attrName;
+                ctx.InterpolatorsStructName = names.Value.interpName;
             }
         }
         
-        static StructDefinition ParseStruct(string structName, string source)
+        /// <summary>
+        /// Detect attribute and interpolator struct names from a vertex function signature.
+        /// Parses "ReturnType FuncName(ParamType param)" to extract ReturnType as interpolator
+        /// name and ParamType as attribute name.
+        /// Returns null if the function signature is not found.
+        /// </summary>
+        public static (string attrName, string interpName)? DetectStructNamesFromSource(
+            string source, string vertexFunctionName)
+        {
+            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(vertexFunctionName))
+                return null;
+            
+            var match = Regex.Match(source,
+                $@"(\w+)\s+{Regex.Escape(vertexFunctionName)}\s*\(\s*(\w+)\s+\w+",
+                RegexOptions.Singleline);
+            
+            if (!match.Success) return null;
+            
+            return (attrName: match.Groups[2].Value, interpName: match.Groups[1].Value);
+        }
+        
+        /// <summary>
+        /// Parse per-pass struct info. Each pass gets its own struct names and definitions
+        /// detected from its vertex function signature. Falls back to context-level data
+        /// for passes that share structs with the reference pass.
+        /// </summary>
+        static void ParsePerPassStructs(ShaderContext ctx)
+        {
+            foreach (var pass in ctx.Passes)
+            {
+                // Detect struct names from this pass's vertex function.
+                // Search HLSLINCLUDE + pass HLSL combined (vertex func may be in either).
+                string signatureSource = (ctx.HlslIncludeBlock ?? "") + "\n" + (pass.HlslProgram ?? "");
+                var names = DetectStructNamesFromSource(signatureSource, pass.VertexFunctionName);
+                
+                if (names != null)
+                {
+                    pass.AttributesStructName = names.Value.attrName;
+                    pass.InterpolatorsStructName = names.Value.interpName;
+                }
+                else
+                {
+                    // Fall back to context-level names (from reference pass)
+                    pass.AttributesStructName = ctx.AttributesStructName;
+                    pass.InterpolatorsStructName = ctx.InterpolatorsStructName;
+                }
+                
+                // Parse structs from HLSLINCLUDE + this pass's HLSL
+                string searchSource = (ctx.HlslIncludeBlock ?? "") + "\n" + (pass.HlslProgram ?? "");
+                
+                pass.Attributes = ParseStruct(pass.AttributesStructName, searchSource);
+                pass.Interpolators = ParseStruct(pass.InterpolatorsStructName, searchSource);
+                
+                // Fall back to context-level structs (e.g. structs only in HLSLINCLUDE
+                // and this pass uses the same names as the reference pass)
+                if (pass.Attributes == null) pass.Attributes = ctx.Attributes;
+                if (pass.Interpolators == null) pass.Interpolators = ctx.Interpolators;
+            }
+        }
+        
+        /// <summary>
+        /// Parse a named struct from source code. Returns null if not found.
+        /// </summary>
+        public static StructDefinition ParseStruct(string structName, string source)
         {
             if (string.IsNullOrEmpty(structName) || string.IsNullOrEmpty(source))
                 return null;
@@ -437,18 +514,16 @@ namespace FS.Shaders.Editor
             
             string source = ctx.ForwardPass.HlslProgram;
             
-            // Parse pragma declarations
-            ctx.Hooks.VertexDisplacementName = ParsePragmaValue(source, "vertexDisplacement");
-            ctx.Hooks.InterpolatorTransferName = ParsePragmaValue(source, "interpolatorTransfer");
-            ctx.Hooks.AlphaClipName = ParsePragmaValue(source, "alphaClip");
-            
-            // Extract function bodies
-            if (ctx.Hooks.HasVertexDisplacement)
-                ctx.Hooks.VertexDisplacementBody = ExtractFunction(source, ctx.Hooks.VertexDisplacementName);
-            if (ctx.Hooks.HasInterpolatorTransfer)
-                ctx.Hooks.InterpolatorTransferBody = ExtractFunction(source, ctx.Hooks.InterpolatorTransferName);
-            if (ctx.Hooks.HasAlphaClip)
-                ctx.Hooks.AlphaClipBody = ExtractFunction(source, ctx.Hooks.AlphaClipName);
+            // Scan for all registered hook pragmas
+            foreach (var hook in ShaderHookRegistry.All)
+            {
+                string funcName = ParsePragmaValue(source, hook.PragmaName);
+                if (!string.IsNullOrEmpty(funcName))
+                {
+                    string funcBody = ExtractFunction(source, funcName);
+                    ctx.Hooks.Register(hook.PragmaName, funcName, funcBody);
+                }
+            }
             
             // Extract helper functions (any function that's not vertex/fragment/hooks)
             ExtractHelperFunctions(ctx, source);
@@ -493,14 +568,18 @@ namespace FS.Shaders.Editor
             var funcPattern = @"(\w+)\s+(\w+)\s*\([^)]*\)\s*\{";
             var matches = Regex.Matches(source, funcPattern);
             
+            // Build exclusion set: vertex/fragment + all active hook functions
             var excludedFuncs = new HashSet<string>
             {
                 ctx.ForwardVertexFunctionName,
-                ctx.ForwardFragmentFunctionName,
-                ctx.Hooks.VertexDisplacementName,
-                ctx.Hooks.InterpolatorTransferName,
-                ctx.Hooks.AlphaClipName
+                ctx.ForwardFragmentFunctionName
             };
+            
+            foreach (var entry in ctx.Hooks.Active)
+            {
+                if (!string.IsNullOrEmpty(entry.Value.FunctionName))
+                    excludedFuncs.Add(entry.Value.FunctionName);
+            }
             
             foreach (Match match in matches)
             {

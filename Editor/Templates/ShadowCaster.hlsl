@@ -23,8 +23,6 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
     
-    {{FORWARD_CONTENT}}
-    
     // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
@@ -40,6 +38,12 @@ Pass
     // -------------------------------------------------------------------------
     {{ATTRIBUTES_STRUCT}}
     {{INTERPOLATORS_STRUCT}}
+
+    // -------------------------------------------------------------------------
+    // Shared body from MainPass
+    // -------------------------------------------------------------------------
+    {{FORWARD_CONTENT}}    
+
     
     // -------------------------------------------------------------------------
     // Hook Functions
@@ -71,9 +75,6 @@ Pass
         #endif
         
         output.{{SV_POSITION}} = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirectionWS));
-        
-        // Transfer UV for alpha clip
-        output.{{TEXCOORD0}} = input.{{TEXCOORD0}};
         
         // Hook: transfer extra interpolators
         {{INTERPOLATOR_TRANSFER_CALL}}

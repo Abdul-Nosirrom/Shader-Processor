@@ -20,37 +20,13 @@ namespace FS.Shaders.Editor
         {
             var sb = new StringBuilder();
             
-            // Helper functions first (they might be called by hooks)
-            // foreach (var helper in ctx.Hooks.HelperFunctions)
-            // {
-            //     string rewritten = RewriteStructNames(helper, ctx.AttributesStructName, attrName,
-            //         ctx.InterpolatorsStructName, interpName);
-            //     sb.AppendLine(rewritten);
-            //     sb.AppendLine();
-            // }
-            
-            // Vertex displacement hook
-            if (ctx.Hooks.HasVertexDisplacement)
+            // Emit function bodies for all active hooks, with struct names rewritten
+            foreach (var entry in ctx.Hooks.Active)
             {
-                string rewritten = RewriteStructNames(ctx.Hooks.VertexDisplacementBody,
-                    ctx.AttributesStructName, attrName, ctx.InterpolatorsStructName, interpName);
-                sb.AppendLine(rewritten);
-                sb.AppendLine();
-            }
-            
-            // Interpolator transfer hook
-            if (ctx.Hooks.HasInterpolatorTransfer)
-            {
-                string rewritten = RewriteStructNames(ctx.Hooks.InterpolatorTransferBody,
-                    ctx.AttributesStructName, attrName, ctx.InterpolatorsStructName, interpName);
-                sb.AppendLine(rewritten);
-                sb.AppendLine();
-            }
-            
-            // Alpha clip hook
-            if (ctx.Hooks.HasAlphaClip)
-            {
-                string rewritten = RewriteStructNames(ctx.Hooks.AlphaClipBody,
+                if (string.IsNullOrEmpty(entry.Value.FunctionBody))
+                    continue;
+                
+                string rewritten = RewriteStructNames(entry.Value.FunctionBody,
                     ctx.AttributesStructName, attrName, ctx.InterpolatorsStructName, interpName);
                 sb.AppendLine(rewritten);
                 sb.AppendLine();
@@ -115,6 +91,38 @@ namespace FS.Shaders.Editor
                 return "";
 
             string hlsl = ctx.ForwardPass.HlslProgram;
+            
+            // =====================================================================
+            // Strip tessellation code block (if present).
+            // Tessellation's ModifyPass injects ~200 lines of tess code into the
+            // forward pass HlslProgram. Generated passes get their own tessellation
+            // via {{TESSELLATION_CODE}}, so we must remove it from FORWARD_CONTENT
+            // to avoid duplication and forward-reference compile errors.
+            // The block spans from the header comment to #endif // _TESSELLATION.
+            // =====================================================================
+            hlsl = Regex.Replace(hlsl,
+                @"// =+\s*\n// TESSELLATION \(Auto-generated.*?#endif\s*//\s*_TESSELLATION",
+                "", RegexOptions.Singleline);
+
+            // =====================================================================
+            // CRITICAL: Strip CBUFFER, textures, and includes BEFORE function removal.
+            // RemoveFunction's regex uses (\w+\s+)? for optional modifiers, which
+            // can greedily match nearby keywords like CBUFFER_END across newlines,
+            // eating them as part of the function removal. Stripping the CBUFFER
+            // first eliminates this interaction.
+            // =====================================================================
+            
+            // Remove CBUFFER (handled by {{CBUFFER}} in template)
+            hlsl = Regex.Replace(hlsl, @"CBUFFER_START\s*\(\s*UnityPerMaterial\s*\).*?CBUFFER_END", "", RegexOptions.Singleline);
+
+            // Remove texture/sampler declarations (handled by {{TEXTURES}} in template)
+            hlsl = Regex.Replace(hlsl, @"TEXTURE2D\s*\(\s*\w+\s*\)\s*;", "");
+            hlsl = Regex.Replace(hlsl, @"SAMPLER\s*\(\s*\w+\s*\)\s*;", "");
+            hlsl = Regex.Replace(hlsl, @"TEXTURE2D_ARRAY\s*\(\s*\w+\s*\)\s*;", "");
+            hlsl = Regex.Replace(hlsl, @"TEXTURECUBE\s*\(\s*\w+\s*\)\s*;", "");
+
+            // Remove #include statements (template has its own)
+            hlsl = Regex.Replace(hlsl, @"#include\s+""[^""]+""\s*\n?", "");
 
             // Remove pragmas we'll replace
             hlsl = RemovePragmas(hlsl, "vertex", "fragment");
@@ -128,34 +136,23 @@ namespace FS.Shaders.Editor
             hlsl = RemoveFunction(hlsl, ctx.ForwardFragmentFunctionName);
 
             // Remove hook functions (they're output separately via HOOK_FUNCTIONS)
-            if (ctx.Hooks.HasVertexDisplacement)
-                hlsl = RemoveFunction(hlsl, ctx.Hooks.VertexDisplacementName);
-            if (ctx.Hooks.HasInterpolatorTransfer)
-                hlsl = RemoveFunction(hlsl, ctx.Hooks.InterpolatorTransferName);
-            if (ctx.Hooks.HasAlphaClip)
-                hlsl = RemoveFunction(hlsl, ctx.Hooks.AlphaClipName);
+            foreach (var entry in ctx.Hooks.Active)
+            {
+                hlsl = RemoveFunction(hlsl, entry.Value.FunctionName);
+            }
 
-            // Remove hook pragma declarations
-            hlsl = Regex.Replace(hlsl, @"#pragma\s+(vertexDisplacement|interpolatorTransfer|alphaClip)\s+\w+\s*\n?", "");
+            // Remove hook pragma declarations for all registered hooks
+            foreach (var hook in ShaderHookRegistry.All)
+            {
+                hlsl = Regex.Replace(hlsl, $@"#pragma\s+{Regex.Escape(hook.PragmaName)}\s+\w+\s*\n?", "");
+            }
 
-            // Remove CBUFFER (handled by {{CBUFFER}} in template)
-            hlsl = Regex.Replace(hlsl, @"CBUFFER_START\s*\(\s*UnityPerMaterial\s*\).*?CBUFFER_END", "", RegexOptions.Singleline);
-
-            // Remove texture/sampler declarations (handled by {{TEXTURES}} in template)
-            hlsl = Regex.Replace(hlsl, @"TEXTURE2D\s*\(\s*\w+\s*\)\s*;", "");
-            hlsl = Regex.Replace(hlsl, @"SAMPLER\s*\(\s*\w+\s*\)\s*;", "");
-            hlsl = Regex.Replace(hlsl, @"TEXTURE2D_ARRAY\s*\(\s*\w+\s*\)\s*;", "");
-            hlsl = Regex.Replace(hlsl, @"TEXTURECUBE\s*\(\s*\w+\s*\)\s*;", "");
-
-            // Remove #include statements (template has its own)
-            hlsl = Regex.Replace(hlsl, @"#include\s+""[^""]+""\s*\n?", "");
-
-            // Rewrite struct names
+            // Rewrite struct names (for any remaining references in helper code)
             hlsl = RewriteStructNames(hlsl, ctx.AttributesStructName, targetAttrName,
                 ctx.InterpolatorsStructName, targetInterpName);
             
-            // Remove stray # characters on their own lines
-            hlsl = Regex.Replace(hlsl, @"^\s*#\s*$", "", RegexOptions.Multiline);
+            // Remove stray # or #pragma on their own lines
+            hlsl = Regex.Replace(hlsl, @"^\s*#\s*(pragma)?\s*$", "", RegexOptions.Multiline);
 
             // Clean up multiple blank lines
             hlsl = Regex.Replace(hlsl, @"\n{3,}", "\n\n");
@@ -223,15 +220,18 @@ namespace FS.Shaders.Editor
             if (string.IsNullOrEmpty(functionName))
                 return hlsl;
     
-            // Pattern: return_type FunctionName(params) { body }
-            // Must handle nested braces
+            // Pattern: [modifier] return_type FunctionName(params) [: semantic] { body }
+            // Must handle nested braces.
+            // IMPORTANT: The optional modifier group uses [ \t]+ (not \s+) to prevent
+            // matching words from unrelated lines. Without this, a word like CBUFFER_END
+            // on a distant line could be grabbed as a "modifier", eating it from the source.
             var pattern = $@"
-                (\w+\s+)?                           # Optional return type modifiers (half4, void, etc)
+                (\w+[ \t]+)?                        # Optional modifier (inline, etc.) - same line only
                 \w+\s+                              # Return type
                 {Regex.Escape(functionName)}\s*     # Function name
                 \([^)]*\)\s*                        # Parameters
-                (:\s*\w+\s*)?                        # Optional semantic (: SV_Target)
-                \{{                                  # Opening brace
+                (:\s*\w+\s*)?                       # Optional semantic (: SV_Target)
+                \{{                                 # Opening brace
             ";
     
             var match = Regex.Match(hlsl, pattern, RegexOptions.IgnorePatternWhitespace | RegexOptions.Singleline);

@@ -55,7 +55,7 @@ namespace FS.Shaders.Editor
         public bool StructsInHlslInclude;
         
         //=============================================================================
-        // Structs
+        // Structs (from reference pass - used for generated passes)
         //=============================================================================
         
         /// <summary>Name of the attributes struct (e.g., "Attributes", "VertexInput").</summary>
@@ -115,8 +115,8 @@ namespace FS.Shaders.Editor
         // Hooks (parsed from pragmas)
         //=============================================================================
         
-        /// <summary>Parsed hook pragmas and their function bodies.</summary>
-        public HookDefinitions Hooks = new HookDefinitions();
+        /// <summary>Active hooks parsed from reference pass pragmas.</summary>
+        public HookState Hooks = new HookState();
         
         //=============================================================================
         // Tag Processor State
@@ -148,6 +148,66 @@ namespace FS.Shaders.Editor
         public bool TessellationEnabled => HasFeature("Tessellation");
         public bool OutlinesEnabled => HasFeature("Outlines");
     }
+    
+    //=============================================================================
+    // Hook State (parsed from pragmas, keyed by pragma name)
+    //=============================================================================
+    
+    /// <summary>
+    /// Stores which hooks are active for this shader and their parsed function data.
+    /// Keyed by pragma name (e.g., "vertexDisplacement").
+    /// </summary>
+    public class HookState
+    {
+        readonly Dictionary<string, HookInstance> _active = new Dictionary<string, HookInstance>(StringComparer.OrdinalIgnoreCase);
+        
+        /// <summary>Register an active hook with its parsed function name and body.</summary>
+        public void Register(string pragmaName, string functionName, string functionBody)
+        {
+            _active[pragmaName] = new HookInstance
+            {
+                FunctionName = functionName,
+                FunctionBody = functionBody
+            };
+        }
+        
+        /// <summary>Check if a hook is active by pragma name.</summary>
+        public bool IsActive(string pragmaName) => _active.ContainsKey(pragmaName);
+        
+        /// <summary>Get the user's function name for a hook. Returns null if not active.</summary>
+        public string GetFunctionName(string pragmaName)
+        {
+            return _active.TryGetValue(pragmaName, out var h) ? h.FunctionName : null;
+        }
+        
+        /// <summary>Get the parsed function body for a hook. Returns null if not active.</summary>
+        public string GetFunctionBody(string pragmaName)
+        {
+            return _active.TryGetValue(pragmaName, out var h) ? h.FunctionBody : null;
+        }
+        
+        /// <summary>All active hooks for iteration.</summary>
+        public IEnumerable<KeyValuePair<string, HookInstance>> Active => _active;
+        
+        /// <summary>Helper functions extracted from forward pass (non-hook, non-vert/frag functions).</summary>
+        public List<string> HelperFunctions = new List<string>();
+    }
+    
+    /// <summary>
+    /// A single active hook instance — the parsed function name and body.
+    /// </summary>
+    public class HookInstance
+    {
+        /// <summary>User's function name (e.g., "HeightDisplace").</summary>
+        public string FunctionName;
+        
+        /// <summary>Full function body including signature (e.g., "void HeightDisplace(inout Attributes input) { ... }").</summary>
+        public string FunctionBody;
+    }
+    
+    //=============================================================================
+    // Struct, Texture, Pass, and other data classes
+    //=============================================================================
     
     /// <summary>
     /// Parsed struct definition with field information.
@@ -210,6 +270,26 @@ namespace FS.Shaders.Editor
         public string VertexFunctionName;
         public string FragmentFunctionName;
         
+        //=============================================================================
+        // Per-Pass Struct Info (detected from this pass's vertex function signature)
+        //=============================================================================
+        
+        /// <summary>Attributes struct name for this pass (e.g., "Attributes", "attr").</summary>
+        public string AttributesStructName;
+        
+        /// <summary>Interpolators struct name for this pass (e.g., "Interpolators", "interp").</summary>
+        public string InterpolatorsStructName;
+        
+        /// <summary>Parsed Attributes struct for this pass.</summary>
+        public StructDefinition Attributes;
+        
+        /// <summary>Parsed Interpolators struct for this pass.</summary>
+        public StructDefinition Interpolators;
+        
+        //=============================================================================
+        // Tags
+        //=============================================================================
+        
         /// <summary>All tags declared in this pass's Tags block.</summary>
         public Dictionary<string, string> Tags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         
@@ -227,29 +307,6 @@ namespace FS.Shaders.Editor
             val = val.Trim().ToLowerInvariant();
             return val == "on" || val == "true" || val == "enabled" || val == "1" || val == "yes";
         }
-    }
-    
-    /// <summary>
-    /// Hook function definitions parsed from pragmas.
-    /// </summary>
-    public class HookDefinitions
-    {
-        // Function names (null if not defined)
-        public string VertexDisplacementName;
-        public string InterpolatorTransferName;
-        public string AlphaClipName;
-        
-        // Function bodies (including signature)
-        public string VertexDisplacementBody;
-        public string InterpolatorTransferBody;
-        public string AlphaClipBody;
-        
-        // Helper functions called by hooks (extracted from Forward pass)
-        public List<string> HelperFunctions = new List<string>();
-        
-        public bool HasVertexDisplacement => !string.IsNullOrEmpty(VertexDisplacementName);
-        public bool HasInterpolatorTransfer => !string.IsNullOrEmpty(InterpolatorTransferName);
-        public bool HasAlphaClip => !string.IsNullOrEmpty(AlphaClipName);
     }
     
     /// <summary>

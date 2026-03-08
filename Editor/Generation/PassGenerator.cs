@@ -58,7 +58,14 @@ namespace FS.Shaders.Editor
             if (string.IsNullOrEmpty(template))
                 return "// ERROR: DepthNormals template not found";
             
-            return TemplateEngine.ProcessPassTemplate(template, ctx, "DepthNormals");
+            // DepthNormals needs guaranteed normal fields in both structs
+            var replacements = new Dictionary<string, string>
+            {
+                { "ATTRIBUTES_STRUCT", StructGenerator.GenerateDepthNormalsAttributes(ctx) },
+                { "INTERPOLATORS_STRUCT", StructGenerator.GenerateDepthNormalsInterpolators(ctx) }
+            };
+            
+            return TemplateEngine.ProcessPassTemplate(template, ctx, "DepthNormals", replacements);
         }
         
         public static string GenerateMotionVectorsPass(ShaderContext ctx)

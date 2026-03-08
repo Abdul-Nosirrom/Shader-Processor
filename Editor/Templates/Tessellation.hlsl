@@ -14,6 +14,8 @@
 #pragma hull Hull
 #pragma domain Domain
 
+{{HOOK_DEFINES}}
+
 #ifdef _TESSELLATION
 
 // Default mode if none specified
@@ -36,6 +38,9 @@
 struct TessControlPoint
 {
 {{TESS_CONTROL_POINT_FIELDS}}
+    #ifdef FS_TESSELLATION_FACTOR_OVERRIDE
+    float _tessFactorOverride : TEXCOORD7;
+    #endif
     UNITY_VERTEX_INPUT_INSTANCE_ID
 };
 
@@ -127,6 +132,12 @@ TessControlPoint TessVertex({{ATTRIBUTES_NAME}} input)
     UNITY_TRANSFER_INSTANCE_ID(input, o);
     
 {{TESS_VERTEX_BODY}}
+
+    #ifdef FS_TESSELLATION_FACTOR_OVERRIDE
+    float _overrideFactor = _TessellationFactor;
+    {{TESSELLATION_FACTOR_OVERRIDE_CALL}}
+    o._tessFactorOverride = _overrideFactor;
+    #endif
     
     return o;
 }
@@ -187,6 +198,11 @@ TessFactors PatchConstant(InputPatch<TessControlPoint, 3> patch)
         f.n0 = TransformObjectToWorldNormal(patch[0].normalOS);
         f.n1 = TransformObjectToWorldNormal(patch[1].normalOS);
         f.n2 = TransformObjectToWorldNormal(patch[2].normalOS);
+    #endif
+    
+    #ifdef FS_TESSELLATION_FACTOR_OVERRIDE
+    float _avgFactor = (patch[0]._tessFactorOverride + patch[1]._tessFactorOverride + patch[2]._tessFactorOverride) / 3.0;
+    f.edge[0] = f.edge[1] = f.edge[2] = f.inside = _avgFactor;
     #endif
     
     return f;

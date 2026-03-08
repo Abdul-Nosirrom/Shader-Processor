@@ -152,5 +152,79 @@ namespace FS.Shaders.Editor
             
             return GenerateAttributesStruct(ctx, "MetaAttributes", additionalFields);
         }
+        
+        /// <summary>
+        /// Generate DepthNormals-specific Attributes. Ensures NORMAL semantic exists
+        /// since the pass fundamentally needs normals to function.
+        /// </summary>
+        public static string GenerateDepthNormalsAttributes(ShaderContext ctx)
+        {
+            string[] additionalFields = null;
+            
+            // Resolve what {{NORMAL}} will be (same logic as AddSemanticReplacements)
+            string resolvedName = ctx.Attributes?.GetField("NORMAL")?.Name ?? "normalOS";
+            
+            // Check if a field with that name already exists (by any semantic)
+            bool fieldExists = false;
+            if (ctx.Attributes?.Fields != null)
+            {
+                foreach (var field in ctx.Attributes.Fields)
+                {
+                    if (!field.IsMacro && field.Name == resolvedName)
+                    {
+                        fieldExists = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!fieldExists)
+            {
+                additionalFields = new[] { $"float3 {resolvedName} : NORMAL;" };
+            }
+            
+            return GenerateAttributesStruct(ctx, "DepthNormalsAttributes", additionalFields);
+        }
+        
+        /// <summary>
+        /// Generate DepthNormals-specific Interpolators. Ensures a normal field exists
+        /// since the pass needs to output world-space normals.
+        /// 
+        /// Strategy: Resolve what {{NORMAL_WS}} will be (same logic as AddSemanticReplacements),
+        /// then check if that field already exists by name. Only add if truly missing.
+        /// This avoids duplicate field names when the user has e.g. "normalWS : TEXCOORD1".
+        /// </summary>
+        public static string GenerateDepthNormalsInterpolators(ShaderContext ctx)
+        {
+            string[] additionalFields = null;
+            
+            // Resolve the field name that {{NORMAL_WS}} will map to
+            // (mirrors AddSemanticReplacements logic)
+            string resolvedName = ctx.Interpolators?.GetField("NORMAL")?.Name
+                               ?? ctx.Interpolators?.GetField("NORMALWS")?.Name
+                               ?? ctx.Interpolators?.GetField("NORMAL_WS")?.Name
+                               ?? "normalWS";
+            
+            // Check if a field with that name already exists in the struct (by any semantic)
+            bool fieldExists = false;
+            if (ctx.Interpolators?.Fields != null)
+            {
+                foreach (var field in ctx.Interpolators.Fields)
+                {
+                    if (!field.IsMacro && field.Name == resolvedName)
+                    {
+                        fieldExists = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!fieldExists)
+            {
+                additionalFields = new[] { $"float3 {resolvedName} : NORMAL;" };
+            }
+            
+            return GenerateInterpolatorsStruct(ctx, "DepthNormalsInterpolators", additionalFields);
+        }
     }
 }

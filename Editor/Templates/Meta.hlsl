@@ -19,8 +19,6 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MetaInput.hlsl"
     
-    {{FORWARD_CONTENT}}
-    
     // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
@@ -32,6 +30,12 @@ Pass
     // -------------------------------------------------------------------------
     {{ATTRIBUTES_STRUCT}}
     {{INTERPOLATORS_STRUCT}}
+
+    // -------------------------------------------------------------------------
+    // Shared body from MainPass
+    // -------------------------------------------------------------------------
+    {{FORWARD_CONTENT}}    
+
     
     // -------------------------------------------------------------------------
     // Vertex
@@ -44,7 +48,6 @@ Pass
         UNITY_TRANSFER_INSTANCE_ID(input, output);
         
         output.{{SV_POSITION}} = UnityMetaVertexPosition(input.{{POSITION}}.xyz, input.uv1, input.uv2, unity_LightmapST, unity_DynamicLightmapST);
-        output.{{TEXCOORD0}} = input.{{TEXCOORD0}};
         
         return output;
     }

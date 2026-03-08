@@ -20,8 +20,6 @@ Pass
     
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     
-    {{FORWARD_CONTENT}}
-    
     // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
@@ -33,6 +31,12 @@ Pass
     // -------------------------------------------------------------------------
     {{ATTRIBUTES_STRUCT}}
     {{INTERPOLATORS_STRUCT}}
+
+    // -------------------------------------------------------------------------
+    // Shared body from MainPass
+    // -------------------------------------------------------------------------
+    {{FORWARD_CONTENT}}    
+
     
     // -------------------------------------------------------------------------
     // Hook Functions
@@ -54,7 +58,6 @@ Pass
         {{VERTEX_DISPLACEMENT_CALL}}
         
         output.{{SV_POSITION}} = TransformObjectToHClip(input.{{POSITION}}.xyz);
-        output.{{TEXCOORD0}} = input.{{TEXCOORD0}};
         
         // Hook: transfer extra interpolators
         {{INTERPOLATOR_TRANSFER_CALL}}

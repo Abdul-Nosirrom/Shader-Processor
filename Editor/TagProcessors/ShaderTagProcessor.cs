@@ -278,6 +278,21 @@ namespace FS.Shaders.Editor
             InjectProcessorProperties(ctx);
             InjectProcessorCBuffer(ctx);
             
+            // Properties entries are only used during injection — safe to clear.
+            ctx.ProcessorPropertiesEntries = null;
+            
+            // IMPORTANT: Do NOT clear ProcessorCBufferEntries here.
+            // GenerateCBuffer (called during pass generation) combines ctx.CBufferContent
+            // (original variables from first Parse) with ctx.ProcessorCBufferEntries (tag
+            // processor additions like tessellation uniforms) to produce the complete CBUFFER
+            // for generated passes. Since we don't re-parse after ProcessAllTags,
+            // CBufferContent stays at its first-parse value and ProcessorCBufferEntries
+            // provides the delta. Clearing it would lose those additions.
+            
+            // Re-parse passes so ModifyPass gets fresh HlslProgram content and indices
+            // (injection above modified the source, making previously parsed data stale)
+            ShaderParser.ReparseAllPasses(ctx);
+            
             // Stage 3: Modify passes where each processor's tag applies
             foreach (var pass in ctx.Passes)
             {
