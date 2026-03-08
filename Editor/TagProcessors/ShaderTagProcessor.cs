@@ -75,28 +75,6 @@ namespace FS.Shaders.Editor
         {
             return null;
         }
-        
-        //=============================================================================
-        // Helper Methods for Derived Classes
-        //=============================================================================
-        
-        /// <summary>
-        /// Check if a property already exists (in original Properties block or processor additions).
-        /// </summary>
-        protected bool PropertyExists(ShaderContext ctx, string propertyName)
-        {
-            return ctx.PropertiesBlock?.Contains(propertyName) == true
-                || ctx.ProcessorPropertiesEntries?.Contains(propertyName) == true;
-        }
-        
-        /// <summary>
-        /// Check if a CBUFFER entry already exists (in original CBUFFER or processor additions).
-        /// </summary>
-        protected bool CBufferEntryExists(ShaderContext ctx, string entryName)
-        {
-            return ctx.CBufferContent?.Contains(entryName) == true
-                || ctx.ProcessorCBufferEntries?.Contains(entryName) == true;
-        }
     }
     
     /// <summary>
@@ -262,7 +240,8 @@ namespace FS.Shaders.Editor
             InjectProcessorProperties(ctx);
             InjectProcessorCBuffer(ctx);
             
-            // Properties entries are only used during injection — safe to clear.
+            // Properties entries were accumulated from both pass injectors (CollectMaterialEntries)
+            // and tag processors (above). Now injected into source — safe to clear.
             ctx.ProcessorPropertiesEntries = null;
             
             // IMPORTANT: Do NOT clear ProcessorCBufferEntries here.

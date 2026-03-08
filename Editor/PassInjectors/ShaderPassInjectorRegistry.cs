@@ -178,7 +178,8 @@ namespace FS.Shaders.Editor
             var activeInjectors = new List<ShaderPassInjector>();
             
             // [InjectBasePasses] activates all base passes
-            if (source.Contains("[InjectBasePasses]"))
+            int basePassIdx = source.IndexOf("[InjectBasePasses]", StringComparison.Ordinal);
+            if (basePassIdx >= 0 && !ShaderProcessor.IsInComment(source, basePassIdx))
             {
                 foreach (var injector in BasePasses)
                     activeInjectors.Add(injector);
@@ -188,9 +189,11 @@ namespace FS.Shaders.Editor
             foreach (var injector in s_Injectors)
             {
                 if (activeInjectors.Contains(injector))
-                    continue; // Already added via InjectBasePasses
-                
-                if (source.Contains($"[InjectPass:{injector.PassName}]"))
+                    continue;
+    
+                string marker = $"[InjectPass:{injector.PassName}]";
+                int idx = source.IndexOf(marker, StringComparison.Ordinal);
+                if (idx >= 0 && !ShaderProcessor.IsInComment(source, idx))
                     activeInjectors.Add(injector);
             }
             

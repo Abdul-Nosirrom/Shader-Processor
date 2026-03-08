@@ -92,8 +92,9 @@ namespace FS.Shaders.Editor
     }
 
     /// <summary>
-    /// Alpha clip hook. Called in fragment shaders to discard transparent pixels.
-    /// Signature: void FuncName(Interpolators input)
+    /// Tessellation factor override, allows for dynamically modifying tessellation factor per-patch
+    /// by hooking into a custom function
+    /// Signature: void FuncName(inout float tessFactor, Attributes input)
     /// </summary>
     [ShaderHook]
     public class TessellationFactorOverride : ShaderHookDefinition

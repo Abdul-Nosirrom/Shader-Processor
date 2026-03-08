@@ -21,7 +21,6 @@ namespace FS.Shaders.Editor
             // Initialize context
             var ctx = new ShaderContext
             {
-                OriginalSource = source,
                 ProcessedSource = source,
                 ShaderPath = shaderPath,
                 ShaderDirectory = Path.GetDirectoryName(shaderPath)
@@ -107,7 +106,7 @@ namespace FS.Shaders.Editor
             }
         }
         
-        bool IsInComment(string source, int position)
+        public static bool IsInComment(string source, int position)
         {
             int lineStart = source.LastIndexOf('\n', position);
             if (lineStart < 0) lineStart = 0;

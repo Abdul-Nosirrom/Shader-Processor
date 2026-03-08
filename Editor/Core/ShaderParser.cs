@@ -524,9 +524,6 @@ namespace FS.Shaders.Editor
                     ctx.Hooks.Register(hook.PragmaName, funcName, funcBody);
                 }
             }
-            
-            // Extract helper functions (any function that's not vertex/fragment/hooks)
-            ExtractHelperFunctions(ctx, source);
         }
         
         static string ParsePragmaValue(string source, string pragmaName)
@@ -560,90 +557,6 @@ namespace FS.Shaders.Editor
             }
             
             return source.Substring(startIndex, endIndex - startIndex);
-        }
-        
-        static void ExtractHelperFunctions(ShaderContext ctx, string source)
-        {
-            // Find all function definitions
-            var funcPattern = @"(\w+)\s+(\w+)\s*\([^)]*\)\s*\{";
-            var matches = Regex.Matches(source, funcPattern);
-            
-            // Build exclusion set: vertex/fragment + all active hook functions
-            var excludedFuncs = new HashSet<string>
-            {
-                ctx.ForwardVertexFunctionName,
-                ctx.ForwardFragmentFunctionName
-            };
-            
-            foreach (var entry in ctx.Hooks.Active)
-            {
-                if (!string.IsNullOrEmpty(entry.Value.FunctionName))
-                    excludedFuncs.Add(entry.Value.FunctionName);
-            }
-            
-            foreach (Match match in matches)
-            {
-                string funcName = match.Groups[2].Value;
-                
-                // Skip excluded functions
-                if (excludedFuncs.Contains(funcName))
-                    continue;
-                
-                // Skip common shader macros/intrinsics
-                if (funcName.StartsWith("UNITY_") || funcName.StartsWith("TRANSFORM_"))
-                    continue;
-                
-                string funcBody = ExtractFunction(source, funcName);
-                if (!string.IsNullOrEmpty(funcBody))
-                {
-                    ctx.Hooks.HelperFunctions.Add(funcBody);
-                }
-            }
-        }
-        
-        //=============================================================================
-        // Utility Functions
-        //=============================================================================
-        
-        /// <summary>
-        /// Find the index where passes should be injected (before SubShader closing brace).
-        /// </summary>
-        public static int GetPassInjectionIndex(string source)
-        {
-            // Find SubShader block
-            var subShaderMatch = Regex.Match(source, @"SubShader\s*\{");
-            if (!subShaderMatch.Success) return -1;
-            
-            int subShaderStart = subShaderMatch.Index;
-            int braceCount = 0;
-            int lastBraceIndex = -1;
-            
-            for (int i = subShaderStart; i < source.Length; i++)
-            {
-                if (source[i] == '{')
-                {
-                    braceCount++;
-                }
-                else if (source[i] == '}')
-                {
-                    braceCount--;
-                    if (braceCount == 0)
-                    {
-                        lastBraceIndex = i;
-                        break;
-                    }
-                }
-            }
-            
-            // Return position just before the closing brace
-            if (lastBraceIndex > 0)
-            {
-                // Find start of line containing the brace
-                int lineStart = source.LastIndexOf('\n', lastBraceIndex);
-                return lineStart > 0 ? lineStart : lastBraceIndex;
-            }
-            
-            return -1;
         }
     }
 }

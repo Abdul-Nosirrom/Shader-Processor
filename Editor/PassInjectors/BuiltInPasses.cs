@@ -124,13 +124,13 @@ namespace FS.Shaders.Editor
         
         public override string GetPropertiesEntries(ShaderContext ctx)
         {
-            if (PropertyExists(ctx, "_OutlineWidth")) return null;
+            if (ctx.PropertyExists("_OutlineWidth")) return null;
             return OutlineProperties;
         }
         
         public override string GetCBufferEntries(ShaderContext ctx)
         {
-            if (CBufferEntryExists(ctx, "_OutlineWidth")) return null;
+            if (ctx.CBufferEntryExists("_OutlineWidth")) return null;
             return OutlineCBuffer;
         }
     }

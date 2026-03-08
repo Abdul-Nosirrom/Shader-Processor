@@ -91,18 +91,6 @@ namespace FS.Shaders.Editor
                 return "";
 
             string hlsl = ctx.ForwardPass.HlslProgram;
-            
-            // =====================================================================
-            // Strip tessellation code block (if present).
-            // Tessellation's ModifyPass injects ~200 lines of tess code into the
-            // forward pass HlslProgram. Generated passes get their own tessellation
-            // via {{TESSELLATION_CODE}}, so we must remove it from FORWARD_CONTENT
-            // to avoid duplication and forward-reference compile errors.
-            // The block spans from the header comment to #endif // _TESSELLATION.
-            // =====================================================================
-            hlsl = Regex.Replace(hlsl,
-                @"// =+\s*\n// TESSELLATION \(Auto-generated.*?#endif\s*//\s*_TESSELLATION",
-                "", RegexOptions.Singleline);
 
             // =====================================================================
             // CRITICAL: Strip CBUFFER, textures, and includes BEFORE function removal.

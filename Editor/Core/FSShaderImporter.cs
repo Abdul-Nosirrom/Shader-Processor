@@ -14,9 +14,6 @@ namespace FS.Shaders.Editor
     [ScriptedImporter(1, new string[0], new[] { "shader" }, AllowCaching = true)]
     public class FSShaderImporter : ScriptedImporter
     {
-        [NonSerialized]
-        public string LastProcessedSource;
-        
         public override void OnImportAsset(AssetImportContext ctx)
         {
             string source = File.ReadAllText(ctx.assetPath);
@@ -24,8 +21,6 @@ namespace FS.Shaders.Editor
             // Process the shader
             var processor = new ShaderProcessor();
             string processed = processor.Process(source, ctx.assetPath);
-            
-            LastProcessedSource = processed;
             
             // Create shader asset
             Shader shader = ShaderUtil.CreateShaderAsset(ctx, processed, true);
@@ -110,7 +105,6 @@ namespace FS.Shaders.Editor
                 string source = File.ReadAllText(importer.assetPath);
                 m_ParsedContext = new ShaderContext
                 {
-                    OriginalSource = source,
                     ProcessedSource = source,
                     ShaderPath = importer.assetPath,
                     ShaderDirectory = Path.GetDirectoryName(importer.assetPath)
@@ -188,11 +182,6 @@ namespace FS.Shaders.Editor
                 foreach (var hook in ShaderHookRegistry.All)
                 {
                     DrawHookInfo(hook.PragmaName, m_ParsedContext.Hooks.GetFunctionName(hook.PragmaName));
-                }
-                
-                if (m_ParsedContext.Hooks.HelperFunctions.Count > 0)
-                {
-                    EditorGUILayout.LabelField($"Helper Functions: {m_ParsedContext.Hooks.HelperFunctions.Count}");
                 }
                 
                 EditorGUI.indentLevel--;

@@ -13,9 +13,6 @@ namespace FS.Shaders.Editor
         // Source
         //=============================================================================
         
-        /// <summary>Original unmodified shader source.</summary>
-        public string OriginalSource;
-        
         /// <summary>Source being modified by processors.</summary>
         public string ProcessedSource;
         
@@ -142,6 +139,16 @@ namespace FS.Shaders.Editor
         public bool HasFeature(string feature) => EnabledFeatures.Contains(feature);
         public void EnableFeature(string feature) => EnabledFeatures.Add(feature);
         
+        /// <summary>
+        /// Check if a property already exists (in original Properties block or processor additions).
+        /// </summary>
+        public bool PropertyExists(string propertyName) => PropertiesBlock?.Contains(propertyName) == true || ProcessorPropertiesEntries?.Contains(propertyName) == true;
+        
+        /// <summary>
+        /// Check if a CBUFFER entry already exists (in original CBUFFER or processor additions).
+        /// </summary>
+        public bool CBufferEntryExists(string entryName) =>  CBufferContent?.Contains(entryName) == true || ProcessorCBufferEntries?.Contains(entryName) == true;
+        
         public bool TessellationEnabled => HasFeature("Tessellation");
     }
     
@@ -176,17 +183,8 @@ namespace FS.Shaders.Editor
             return _active.TryGetValue(pragmaName, out var h) ? h.FunctionName : null;
         }
         
-        /// <summary>Get the parsed function body for a hook. Returns null if not active.</summary>
-        public string GetFunctionBody(string pragmaName)
-        {
-            return _active.TryGetValue(pragmaName, out var h) ? h.FunctionBody : null;
-        }
-        
         /// <summary>All active hooks for iteration.</summary>
         public IEnumerable<KeyValuePair<string, HookInstance>> Active => _active;
-        
-        /// <summary>Helper functions extracted from forward pass (non-hook, non-vert/frag functions).</summary>
-        public List<string> HelperFunctions = new List<string>();
     }
     
     /// <summary>

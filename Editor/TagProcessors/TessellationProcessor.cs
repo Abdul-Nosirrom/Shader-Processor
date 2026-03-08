@@ -34,13 +34,13 @@ namespace FS.Shaders.Editor
         
         public override string GetPropertiesEntries(ShaderContext ctx)
         {
-            if (PropertyExists(ctx, "_Tessellation")) return null;
+            if (ctx.PropertyExists("_Tessellation")) return null;
             return TessellationProperties;
         }
         
         public override string GetCBufferEntries(ShaderContext ctx)
         {
-            if (CBufferEntryExists(ctx, "_TessellationFactor")) return null;
+            if (ctx.CBufferEntryExists("_TessellationFactor")) return null;
             return TessellationCBuffer;
         }
         

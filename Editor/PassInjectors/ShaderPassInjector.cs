@@ -66,23 +66,5 @@ namespace FS.Shaders.Editor
         /// Return null if no additional replacements needed.
         /// </summary>
         public virtual Dictionary<string, string> GetAdditionalReplacements(ShaderContext ctx) => null;
-        
-        //=============================================================================
-        // Helpers (available to derived classes)
-        //=============================================================================
-        
-        /// <summary>Check if a property already exists (in original or processor additions).</summary>
-        protected bool PropertyExists(ShaderContext ctx, string propertyName)
-        {
-            return ctx.PropertiesBlock?.Contains(propertyName) == true
-                || ctx.ProcessorPropertiesEntries?.Contains(propertyName) == true;
-        }
-        
-        /// <summary>Check if a CBUFFER entry already exists (in original or processor additions).</summary>
-        protected bool CBufferEntryExists(ShaderContext ctx, string entryName)
-        {
-            return ctx.CBufferContent?.Contains(entryName) == true
-                || ctx.ProcessorCBufferEntries?.Contains(entryName) == true;
-        }
     }
 }
