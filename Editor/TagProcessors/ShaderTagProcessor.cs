@@ -200,8 +200,6 @@ namespace FS.Shaders.Editor
                 .OrderBy(p => p.Priority)
                 .ToList();
             
-            if (allEnabledProcessors.Count == 0) return;
-            
             // Stage 1: Collect Properties entries from all processors
             foreach (var processor in allEnabledProcessors)
             {
