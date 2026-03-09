@@ -15,8 +15,9 @@ A Unity URP shader preprocessing system that automatically generates auxiliary p
 
 ## Installation
 
-1. Copy the package folder into your Unity project's `Packages` directory
-2. The package will be recognized as `com.abdulal.shaderprocessor`
+1. Open the `Package Manager` in Unity
+2. Select `+` and `Install package from git URL...`
+3. Input `https://github.com/Abdul-Nosirrom/Shader-Processor.git` as the URL and install, should show up as `com.abdulal.shaderprocessor`
 
 ## Quick Start
 
