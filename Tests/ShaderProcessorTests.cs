@@ -274,8 +274,17 @@ namespace FS.Shaders.Editor.Tests
         {
             string output = ProcessTestShader("Test09_EverythingCombined.shader");
             
-            Assert.IsTrue(output.Contains("_OutlineWidth"), "Missing _OutlineWidth property");
-            Assert.IsTrue(output.Contains("_OutlineColor"), "Missing _OutlineColor property");
+            // Check the Properties block specifically, not just anywhere in output
+            int propsStart = output.IndexOf("Properties");
+            Assert.IsTrue(propsStart >= 0, "Missing Properties block");
+            
+            int subShaderIdx = output.IndexOf("SubShader", propsStart);
+            string propsContent = output.Substring(propsStart, subShaderIdx - propsStart);
+            
+            Assert.IsTrue(propsContent.Contains("_OutlineWidth"),
+                "Missing _OutlineWidth in Properties block");
+            Assert.IsTrue(propsContent.Contains("_OutlineColor"),
+                "Missing _OutlineColor in Properties block");
         }
         
         [Test]
@@ -869,10 +878,16 @@ namespace FS.Shaders.Editor.Tests
         {
             string output = ProcessTestShader("Test16_PassOnlyTagMode.shader");
             
-            // Even in "Pass" mode, material properties/CBUFFER should be injected
-            // because the Aura pass needs them
-            Assert.IsTrue(output.Contains("_TessellationFactor"),
-                "Tessellation properties should be injected even in Pass mode");
+            // Even in "Pass" mode, material properties should be injected into
+            // the Properties block because the Aura pass needs them
+            int propsStart = output.IndexOf("Properties");
+            Assert.IsTrue(propsStart >= 0, "Missing Properties block");
+            
+            int subShaderIdx = output.IndexOf("SubShader", propsStart);
+            string propsContent = output.Substring(propsStart, subShaderIdx - propsStart);
+            
+            Assert.IsTrue(propsContent.Contains("_TessellationFactor"),
+                "Tessellation properties should be in Properties block even in Pass mode");
         }
         
         [Test]
