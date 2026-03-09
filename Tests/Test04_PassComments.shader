@@ -10,10 +10,20 @@
 // =============================================================================
 Shader "Tests/04_PassComments"
 {
+        
+    // Adding some comment here
+    /*
+    * Another comment
+    */
+
     Properties
     {
         [MainColor] _BaseColor("Color", Color) = (1, 1, 1, 1)
     }
+    // Adding some comment here
+    /*
+    * Another comment
+    */
 
     SubShader
     {
@@ -123,6 +133,7 @@ Shader "Tests/04_PassComments"
             ENDHLSL
         }
 
+        [InjectPass:Outline]
         [InjectBasePasses]
     }
     Fallback "Hidden/Universal Render Pipeline/FallbackError"

@@ -20,6 +20,12 @@ namespace FS.Shaders.Editor
         /// </summary>
         public const string PassPattern = @"Pass\s*(?://[^\n]*)?\s*(?:/\*.*?\*/)?\s*\{";
         
+        /// <summary>
+        /// Pattern that matches whitespace, line comments, and block comments.
+        /// Used between Properties and SubShader where comments may appear.
+        /// </summary>
+        public const string CommentOrWhitespace = @"(\s|//[^\n]*\n|/\*.*?\*/)*";
+        
         //=============================================================================
         // Main Entry Point
         //=============================================================================
@@ -88,8 +94,9 @@ namespace FS.Shaders.Editor
         
         static void ParsePropertiesBlock(ShaderContext ctx)
         {
+            // Better handling of comments
             var match = Regex.Match(ctx.ProcessedSource,
-                @"Properties\s*\{(.*?)\}\s*SubShader",
+                $@"Properties\s*\{{(.*?)\}}{CommentOrWhitespace}SubShader",
                 RegexOptions.Singleline);
             
             if (match.Success)

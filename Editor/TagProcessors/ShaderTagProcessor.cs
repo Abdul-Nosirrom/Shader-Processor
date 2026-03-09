@@ -323,7 +323,7 @@ namespace FS.Shaders.Editor
             if (string.IsNullOrEmpty(ctx.ProcessorPropertiesEntries)) return;
             
             var match = System.Text.RegularExpressions.Regex.Match(ctx.ProcessedSource,
-                @"(Properties\s*\{)(.*?)(\}\s*SubShader)",
+                $@"(Properties\s*\{{)(.*?)(\}}{ShaderParser.CommentOrWhitespace}SubShader)",
                 System.Text.RegularExpressions.RegexOptions.Singleline);
             
             if (!match.Success)
