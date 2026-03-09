@@ -119,8 +119,12 @@ namespace FS.Shaders.Editor
         // Tag Processor State
         //=============================================================================
         
-        /// <summary>Feature flags set by tag processors.</summary>
-        public HashSet<string> EnabledFeatures = new HashSet<string>();
+        /// <summary>
+        /// Feature flags set by tag processors, keyed by feature name.
+        /// Values are the mode: "Full" (apply to authored + generated passes)
+        /// or "Pass" (apply only to authored passes that declare it).
+        /// </summary>
+        public Dictionary<string, string> EnabledFeatures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         
         //=============================================================================
         // Processor Additions (collected from pass injectors and tag processors)
@@ -136,8 +140,16 @@ namespace FS.Shaders.Editor
         // Helpers
         //=============================================================================
         
-        public bool HasFeature(string feature) => EnabledFeatures.Contains(feature);
-        public void EnableFeature(string feature) => EnabledFeatures.Add(feature);
+        public bool HasFeature(string feature) => EnabledFeatures.ContainsKey(feature);
+        
+        /// <summary>
+        /// Enable a feature with a mode. "Full" = authored + generated passes.
+        /// "Pass" = authored passes only (generated passes skip GetPassReplacements).
+        /// </summary>
+        public void EnableFeature(string feature, string mode = "Full") => EnabledFeatures[feature] = mode;
+        
+        /// <summary>Get the mode for an enabled feature. Returns null if not enabled.</summary>
+        public string GetFeatureMode(string feature) => EnabledFeatures.TryGetValue(feature, out var mode) ? mode : null;
         
         /// <summary>
         /// Check if a property already exists (in original Properties block or processor additions).
@@ -294,12 +306,27 @@ namespace FS.Shaders.Editor
                    val.Equals(tagValue, StringComparison.OrdinalIgnoreCase);
         }
         
-        /// <summary>Check if a tag is enabled (On/True/Enabled/1/Yes).</summary>
+        /// <summary>Check if a tag is enabled (On/True/Enabled/1/Yes/Full/Pass).</summary>
         public bool IsTagEnabled(string tagName)
         {
             if (!Tags.TryGetValue(tagName, out var val)) return false;
             val = val.Trim().ToLowerInvariant();
-            return val == "on" || val == "true" || val == "enabled" || val == "1" || val == "yes";
+            return val == "on" || val == "true" || val == "enabled" || val == "1" || val == "yes"
+                || val == "full" || val == "pass";
+        }
+        
+        /// <summary>
+        /// Get the tag mode for a tag processor feature.
+        /// Returns "Full" for on/true/enabled/1/yes/full, "Pass" for pass, null if not set or off.
+        /// </summary>
+        public string GetTagMode(string tagName)
+        {
+            if (!Tags.TryGetValue(tagName, out var val)) return null;
+            val = val.Trim().ToLowerInvariant();
+            if (val == "pass") return "Pass";
+            if (val == "on" || val == "true" || val == "enabled" || val == "1" || val == "yes" || val == "full")
+                return "Full";
+            return null;
         }
     }
 }

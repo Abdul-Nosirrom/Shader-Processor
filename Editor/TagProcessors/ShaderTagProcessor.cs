@@ -160,101 +160,146 @@ namespace FS.Shaders.Editor
         //=============================================================================
         
         /// <summary>
-        /// Process all tags found in the shader.
-        /// Runs each stage in order across all processors.
+        /// Discover enabled tag processors and collect their material data.
+        /// Appends to ctx.ProcessorPropertiesEntries and ctx.ProcessorCBufferEntries
+        /// (alongside any entries already collected from pass injectors).
+        /// Does NOT inject into source or modify passes — that happens in the main pipeline.
         /// </summary>
-        public static void ProcessAllTags(ShaderContext ctx)
+        public static void CollectTagProcessorEntries(ShaderContext ctx)
         {
             Initialize();
             
             // Collect processors enabled at SubShader level
-            var subShaderEnabledProcessors = new List<IShaderTagProcessor>();
-            
             foreach (var processor in s_SortedProcessors)
             {
                 if (ctx.SubShaderTags.TryGetValue(processor.TagName, out string tagValue))
                 {
-                    if (IsTagEnabled(tagValue))
+                    string mode = ParseTagMode(tagValue);
+                    if (mode != null)
                     {
-                        subShaderEnabledProcessors.Add(processor);
-                        ctx.EnableFeature(processor.TagName);
+                        ctx.EnableFeature(processor.TagName, mode);
                     }
                 }
             }
             
             // Also check pass-level tags to enable features
+            // SubShader-level takes precedence (don't overwrite if already set)
             foreach (var pass in ctx.Passes)
             {
                 foreach (var processor in s_SortedProcessors)
                 {
-                    if (pass.IsTagEnabled(processor.TagName))
+                    if (ctx.HasFeature(processor.TagName))
+                        continue; // Already enabled at SubShader level
+                    
+                    string mode = pass.GetTagMode(processor.TagName);
+                    if (mode != null)
                     {
-                        ctx.EnableFeature(processor.TagName);
+                        ctx.EnableFeature(processor.TagName, mode);
                     }
                 }
             }
             
-            // Get all enabled processors (SubShader + any pass-level)
-            var allEnabledProcessors = s_SortedProcessors
+            // Collect properties and CBUFFER entries from enabled processors
+            var enabledProcessors = s_SortedProcessors
                 .Where(p => ctx.HasFeature(p.TagName))
                 .OrderBy(p => p.Priority)
                 .ToList();
             
-            // Stage 1: Collect Properties entries from all processors
-            foreach (var processor in allEnabledProcessors)
+            foreach (var processor in enabledProcessors)
             {
                 try
                 {
                     string props = processor.GetPropertiesEntries(ctx);
                     if (!string.IsNullOrEmpty(props))
-                    {
                         ctx.ProcessorPropertiesEntries += "\n" + props;
-                    }
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError($"[ShaderProcessor] {processor.TagName}.GetPropertiesEntries failed: {e.Message}");
-                }
-            }
-            
-            // Stage 2: Collect CBUFFER entries from all processors
-            foreach (var processor in allEnabledProcessors)
-            {
-                try
-                {
+                    
                     string cbuffer = processor.GetCBufferEntries(ctx);
                     if (!string.IsNullOrEmpty(cbuffer))
-                    {
                         ctx.ProcessorCBufferEntries += "\n" + cbuffer;
-                    }
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError($"[ShaderProcessor] {processor.TagName}.GetCBufferEntries failed: {e.Message}");
+                    Debug.LogError($"[ShaderProcessor] {processor.TagName} material collection failed: {e.Message}");
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Inject accumulated processor properties into the Properties block in source.
+        /// Call this after both CollectMaterialEntries and CollectTagProcessorEntries
+        /// have populated ctx.ProcessorPropertiesEntries.
+        /// </summary>
+        public static void InjectProcessorProperties(ShaderContext ctx)
+        {
+            if (string.IsNullOrEmpty(ctx.ProcessorPropertiesEntries)) return;
+            
+            var match = System.Text.RegularExpressions.Regex.Match(ctx.ProcessedSource,
+                $@"(Properties\s*\{{)(.*?)(\}}{ShaderParser.CommentOrWhitespace}SubShader)",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            
+            if (!match.Success)
+            {
+                Debug.LogWarning("[ShaderProcessor] Could not find Properties block for injection");
+                return;
+            }
+            
+            string content = match.Groups[2].Value;
+            string newContent = content.TrimEnd() + "\n" + ctx.ProcessorPropertiesEntries + "\n    ";
+            
+            ctx.ProcessedSource = ctx.ProcessedSource.Replace(
+                match.Value,
+                match.Groups[1].Value + newContent + match.Groups[3].Value
+            );
+        }
+        
+        /// <summary>
+        /// Inject accumulated processor CBUFFER entries into the CBUFFER in source.
+        /// Call this after both CollectMaterialEntries and CollectTagProcessorEntries
+        /// have populated ctx.ProcessorCBufferEntries.
+        /// </summary>
+        public static void InjectProcessorCBuffer(ShaderContext ctx)
+        {
+            if (string.IsNullOrEmpty(ctx.ProcessorCBufferEntries)) return;
+            
+            var match = System.Text.RegularExpressions.Regex.Match(ctx.ProcessedSource,
+                @"(CBUFFER_START\s*\(\s*UnityPerMaterial\s*\))(.*?)(CBUFFER_END)",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            
+            if (!match.Success)
+            {
+                Debug.LogWarning("[ShaderProcessor] Could not find CBUFFER for injection");
+                return;
+            }
+            
+            string content = match.Groups[2].Value;
+            string newContent = content.TrimEnd() + "\n" + ctx.ProcessorCBufferEntries + "\n            ";
+            
+            ctx.ProcessedSource = ctx.ProcessedSource.Replace(
+                match.Value,
+                match.Groups[1].Value + newContent + match.Groups[3].Value
+            );
+        }
+        
+        /// <summary>
+        /// Run ModifyPass on all passes where tag processors apply.
+        /// Call this AFTER injection and reparse so passes have fresh HlslProgram content.
+        /// </summary>
+        public static void ModifyTaggedPasses(ShaderContext ctx)
+        {
+            Initialize();
+            
+            // Rebuild SubShader-level processor list from enabled features + SubShader tags
+            var subShaderEnabledProcessors = new List<IShaderTagProcessor>();
+            foreach (var processor in s_SortedProcessors)
+            {
+                if (ctx.SubShaderTags.TryGetValue(processor.TagName, out string tagValue))
+                {
+                    string mode = ParseTagMode(tagValue);
+                    if (mode != null)
+                        subShaderEnabledProcessors.Add(processor);
                 }
             }
             
-            // Inject collected entries into source
-            InjectProcessorProperties(ctx);
-            InjectProcessorCBuffer(ctx);
-            
-            // Properties entries were accumulated from both pass injectors (CollectMaterialEntries)
-            // and tag processors (above). Now injected into source — safe to clear.
-            ctx.ProcessorPropertiesEntries = null;
-            
-            // IMPORTANT: Do NOT clear ProcessorCBufferEntries here.
-            // GenerateCBuffer (called during pass generation) combines ctx.CBufferContent
-            // (original variables from first Parse) with ctx.ProcessorCBufferEntries (tag
-            // processor additions like tessellation uniforms) to produce the complete CBUFFER
-            // for generated passes. Since we don't re-parse after ProcessAllTags,
-            // CBufferContent stays at its first-parse value and ProcessorCBufferEntries
-            // provides the delta. Clearing it would lose those additions.
-            
-            // Re-parse passes so ModifyPass gets fresh HlslProgram content and indices
-            // (injection above modified the source, making previously parsed data stale)
-            ShaderParser.ReparseAllPasses(ctx);
-            
-            // Stage 3: Modify passes where each processor's tag applies
             foreach (var pass in ctx.Passes)
             {
                 var processorsForPass = GetProcessorsForPass(ctx, pass, subShaderEnabledProcessors);
@@ -311,62 +356,6 @@ namespace FS.Shaders.Editor
             return result.OrderBy(p => p.Priority).ToList();
         }
         
-        //=============================================================================
-        // Source Injection Helpers
-        //=============================================================================
-        
-        /// <summary>
-        /// Inject processor properties into the Properties block in source.
-        /// </summary>
-        static void InjectProcessorProperties(ShaderContext ctx)
-        {
-            if (string.IsNullOrEmpty(ctx.ProcessorPropertiesEntries)) return;
-            
-            var match = System.Text.RegularExpressions.Regex.Match(ctx.ProcessedSource,
-                $@"(Properties\s*\{{)(.*?)(\}}{ShaderParser.CommentOrWhitespace}SubShader)",
-                System.Text.RegularExpressions.RegexOptions.Singleline);
-            
-            if (!match.Success)
-            {
-                Debug.LogWarning("[ShaderProcessor] Could not find Properties block for injection");
-                return;
-            }
-            
-            string content = match.Groups[2].Value;
-            string newContent = content.TrimEnd() + "\n" + ctx.ProcessorPropertiesEntries + "\n    ";
-            
-            ctx.ProcessedSource = ctx.ProcessedSource.Replace(
-                match.Value,
-                match.Groups[1].Value + newContent + match.Groups[3].Value
-            );
-        }
-        
-        /// <summary>
-        /// Inject processor CBUFFER entries into the CBUFFER in source (Forward pass).
-        /// </summary>
-        static void InjectProcessorCBuffer(ShaderContext ctx)
-        {
-            if (string.IsNullOrEmpty(ctx.ProcessorCBufferEntries)) return;
-            
-            var match = System.Text.RegularExpressions.Regex.Match(ctx.ProcessedSource,
-                @"(CBUFFER_START\s*\(\s*UnityPerMaterial\s*\))(.*?)(CBUFFER_END)",
-                System.Text.RegularExpressions.RegexOptions.Singleline);
-            
-            if (!match.Success)
-            {
-                Debug.LogWarning("[ShaderProcessor] Could not find CBUFFER for injection");
-                return;
-            }
-            
-            string content = match.Groups[2].Value;
-            string newContent = content.TrimEnd() + "\n" + ctx.ProcessorCBufferEntries + "\n            ";
-            
-            ctx.ProcessedSource = ctx.ProcessedSource.Replace(
-                match.Value,
-                match.Groups[1].Value + newContent + match.Groups[3].Value
-            );
-        }
-        
         /// <summary>
         /// Get all registered processors (regardless of which shader they apply to).
         /// Used by documentation and editor tooling.
@@ -380,22 +369,35 @@ namespace FS.Shaders.Editor
         /// <summary>
         /// Get all processors that are enabled for this shader.
         /// </summary>
+        /// <summary>
+        /// Get processors that should contribute to generated passes.
+        /// Filters out "Pass" mode processors since generated passes should only
+        /// receive replacements from "Full" mode features.
+        /// </summary>
         public static IEnumerable<IShaderTagProcessor> GetEnabledProcessors(ShaderContext ctx)
         {
             Initialize();
     
             foreach (var processor in s_SortedProcessors)
             {
-                if (ctx.HasFeature(processor.TagName))
+                string mode = ctx.GetFeatureMode(processor.TagName);
+                if (mode == "Full")
                     yield return processor;
             }
         }
         
-        static bool IsTagEnabled(string value)
+        /// <summary>
+        /// Parse a tag value into a mode string.
+        /// Returns "Full" for on/true/enabled/1/yes/full, "Pass" for pass, null for anything else.
+        /// </summary>
+        static string ParseTagMode(string value)
         {
-            if (string.IsNullOrEmpty(value)) return false;
+            if (string.IsNullOrEmpty(value)) return null;
             value = value.Trim().ToLowerInvariant();
-            return value == "on" || value == "true" || value == "enabled" || value == "1" || value == "yes";
+            if (value == "pass") return "Pass";
+            if (value == "on" || value == "true" || value == "enabled" || value == "1" || value == "yes" || value == "full")
+                return "Full";
+            return null;
         }
         
         //=============================================================================

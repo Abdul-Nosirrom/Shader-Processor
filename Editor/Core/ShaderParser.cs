@@ -519,16 +519,13 @@ namespace FS.Shaders.Editor
         {
             if (ctx.ForwardPass == null) return;
             
-            string passSource = ctx.ForwardPass.HlslProgram;
-            
-            // Search both HLSLINCLUDE and pass for function bodies.
-            // Pragmas are always in the pass, but the function body may be in either location.
-            string bodySearchSource = (ctx.HlslIncludeBlock ?? "") + "\n" + passSource;
+            // Search both HLSLINCLUDE and pass for pragma & function bodies.
+            string bodySearchSource = (ctx.HlslIncludeBlock ?? "") + "\n" + ctx.ForwardPass.HlslProgram;
             
             // Scan for all registered hook pragmas
             foreach (var hook in ShaderHookRegistry.All)
             {
-                string funcName = ParsePragmaValue(passSource, hook.PragmaName);
+                string funcName = ParsePragmaValue(bodySearchSource, hook.PragmaName);
                 if (!string.IsNullOrEmpty(funcName))
                 {
                     string funcBody = ExtractFunction(bodySearchSource, funcName);

@@ -703,10 +703,19 @@ namespace FS.Shaders.Editor.Tests
         {
             string output = ProcessTestShader("Test15_OutlineOnly.shader");
             
-            // This is the early-return regression: outline properties must be injected
-            // even when no tag processors are active
-            Assert.IsTrue(output.Contains("_OutlineWidth"), "Missing _OutlineWidth property");
-            Assert.IsTrue(output.Contains("_OutlineColor"), "Missing _OutlineColor property");
+            // Outline properties must be injected into the Properties block,
+            // not just present in generated pass template output.
+            // Find Properties block content.
+            int propsStart = output.IndexOf("Properties");
+            Assert.IsTrue(propsStart >= 0, "Missing Properties block");
+            
+            int subShaderIdx = output.IndexOf("SubShader", propsStart);
+            string propsContent = output.Substring(propsStart, subShaderIdx - propsStart);
+            
+            Assert.IsTrue(propsContent.Contains("_OutlineWidth"),
+                "Missing _OutlineWidth in Properties block");
+            Assert.IsTrue(propsContent.Contains("_OutlineColor"),
+                "Missing _OutlineColor in Properties block");
         }
         
         [Test]
@@ -714,11 +723,19 @@ namespace FS.Shaders.Editor.Tests
         {
             string output = ProcessTestShader("Test15_OutlineOnly.shader");
             
-            // Outline CBUFFER entries should be in the authored pass's CBUFFER
-            Assert.IsTrue(output.Contains("float _OutlineWidth"),
-                "Missing _OutlineWidth in CBUFFER");
-            Assert.IsTrue(output.Contains("float4 _OutlineColor"),
-                "Missing _OutlineColor in CBUFFER");
+            // Outline CBUFFER entries should be injected into the Forward pass's CBUFFER
+            // (not just present in the generated Outline pass template).
+            // Find the Forward pass CBUFFER specifically.
+            int fwdIdx = output.IndexOf("Name \"Forward\"");
+            Assert.IsTrue(fwdIdx >= 0, "Missing Forward pass");
+            
+            int endHlsl = output.IndexOf("ENDHLSL", fwdIdx);
+            string fwdContent = output.Substring(fwdIdx, endHlsl - fwdIdx);
+            
+            Assert.IsTrue(fwdContent.Contains("float _OutlineWidth"),
+                "Missing _OutlineWidth in Forward pass CBUFFER");
+            Assert.IsTrue(fwdContent.Contains("float4 _OutlineColor"),
+                "Missing _OutlineColor in Forward pass CBUFFER");
         }
         
         [Test]
@@ -761,6 +778,123 @@ namespace FS.Shaders.Editor.Tests
             int cbufferCount = CountOccurrences(output, "CBUFFER_START(UnityPerMaterial)");
             Assert.IsTrue(cbufferCount > 1,
                 $"HLSLINCLUDE in comment triggered false detection, found {cbufferCount} CBUFFERs");
+        }
+        
+        //=============================================================================
+        // Test 06: Full mode (On) still propagates to generated passes
+        //=============================================================================
+        
+        [Test]
+        public void Test06_FullModeStillPropagates()
+        {
+            string output = ProcessTestShader("Test06_PerPassTessellation.shader");
+            
+            // "Tessellation" = "On" on the Tessellated pass maps to "Full" mode.
+            // Generated passes should still get tessellation (backwards compatible).
+            int depthOnlyIdx = output.IndexOf("Name \"DepthOnly\"");
+            Assert.IsTrue(depthOnlyIdx >= 0, "Missing DepthOnly pass");
+            
+            int endHlsl = output.IndexOf("ENDHLSL", depthOnlyIdx);
+            string depthOnlyContent = output.Substring(depthOnlyIdx, endHlsl - depthOnlyIdx);
+            
+            Assert.IsTrue(depthOnlyContent.Contains("TessControlPoint"),
+                "Full mode (On) should propagate tessellation to generated DepthOnly");
+        }
+        
+        //=============================================================================
+        // Test 16: Pass-Only Tag Mode
+        //=============================================================================
+        
+        [Test]
+        public void Test16_AuraPassHasTessellation()
+        {
+            string output = ProcessTestShader("Test16_PassOnlyTagMode.shader");
+            
+            // The Aura pass declares "Tessellation" = "Pass", so it should get tessellation
+            int auraIdx = output.IndexOf("Name \"Aura\"");
+            Assert.IsTrue(auraIdx >= 0, "Missing Aura pass");
+            
+            int endHlsl = output.IndexOf("ENDHLSL", auraIdx);
+            string auraContent = output.Substring(auraIdx, endHlsl - auraIdx);
+            
+            Assert.IsTrue(auraContent.Contains("TessControlPoint"),
+                "Aura pass should have tessellation (Pass mode still applies to declaring pass)");
+            Assert.IsTrue(auraContent.Contains("#pragma hull"),
+                "Aura pass should have hull pragma");
+        }
+        
+        [Test]
+        public void Test16_ForwardPassNoTessellation()
+        {
+            string output = ProcessTestShader("Test16_PassOnlyTagMode.shader");
+            
+            // Forward pass doesn't declare tessellation, so it shouldn't have it
+            int fwdIdx = output.IndexOf("Name \"Forward\"");
+            Assert.IsTrue(fwdIdx >= 0, "Missing Forward pass");
+            
+            int endHlsl = output.IndexOf("ENDHLSL", fwdIdx);
+            string fwdContent = output.Substring(fwdIdx, endHlsl - fwdIdx);
+            
+            Assert.IsFalse(fwdContent.Contains("TessControlPoint"),
+                "Forward pass should NOT have tessellation");
+            Assert.IsFalse(fwdContent.Contains("#pragma hull"),
+                "Forward pass should NOT have hull pragma");
+        }
+        
+        [Test]
+        public void Test16_GeneratedPassesNoTessellation()
+        {
+            string output = ProcessTestShader("Test16_PassOnlyTagMode.shader");
+            
+            // "Pass" mode means generated passes should NOT get tessellation
+            string[] generatedPasses = { "DepthOnly", "ShadowCaster", "DepthNormals", "MotionVectors" };
+            
+            foreach (string passName in generatedPasses)
+            {
+                int passIdx = output.IndexOf($"Name \"{passName}\"");
+                Assert.IsTrue(passIdx >= 0, $"Missing {passName} pass");
+                
+                int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+                string passContent = output.Substring(passIdx, endHlsl - passIdx);
+                
+                Assert.IsFalse(passContent.Contains("TessControlPoint"),
+                    $"{passName} should NOT have tessellation in Pass mode");
+                Assert.IsFalse(passContent.Contains("#pragma hull"),
+                    $"{passName} should NOT have hull pragma in Pass mode");
+            }
+        }
+        
+        [Test]
+        public void Test16_TessPropertiesStillInjected()
+        {
+            string output = ProcessTestShader("Test16_PassOnlyTagMode.shader");
+            
+            // Even in "Pass" mode, material properties/CBUFFER should be injected
+            // because the Aura pass needs them
+            Assert.IsTrue(output.Contains("_TessellationFactor"),
+                "Tessellation properties should be injected even in Pass mode");
+        }
+        
+        [Test]
+        public void Test16_GeneratedPassesStillExist()
+        {
+            string output = ProcessTestShader("Test16_PassOnlyTagMode.shader");
+            
+            // Base passes should still be generated (just without tessellation)
+            Assert.IsTrue(output.Contains("Name \"ShadowCaster\""), "Missing ShadowCaster");
+            Assert.IsTrue(output.Contains("Name \"DepthOnly\""), "Missing DepthOnly");
+            Assert.IsTrue(output.Contains("Name \"DepthNormals\""), "Missing DepthNormals");
+            Assert.IsTrue(output.Contains("Name \"MotionVectors\""), "Missing MotionVectors");
+            Assert.IsTrue(output.Contains("Name \"Meta\""), "Missing Meta");
+        }
+        
+        [Test]
+        public void Test16_NoUnreplacedTemplateMarkers()
+        {
+            string output = ProcessTestShader("Test16_PassOnlyTagMode.shader");
+            var matches = Regex.Matches(output, @"\{\{[A-Z_]+\}\}");
+            Assert.AreEqual(0, matches.Count,
+                $"Found unreplaced template markers: {(matches.Count > 0 ? matches[0].Value : "")}");
         }
     }
 }

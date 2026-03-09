@@ -7,11 +7,12 @@ A Unity URP shader preprocessing system that automatically generates auxiliary p
 - **Automatic Pass Generation**: Write your Forward pass once, get ShadowCaster, DepthOnly, DepthNormals, MotionVectors, and Meta passes generated automatically
 - **Hook System**: Define vertex displacement, interpolator transfer, alpha clip, and tessellation factor override functions that propagate to all generated passes
 - **Pass Injectors**: Data-driven pass definitions. Each pass is a small class + a template. Adding a new pass type requires zero pipeline changes
-- **Tag Processors**: Modular feature injection for things that modify existing passes (like tessellation)
+- **Tag Processors**: Modular feature injection for things that modify existing passes (like tessellation). Supports Full and Pass scoping modes
 - **Hardware Tessellation**: Full tessellation pipeline with multiple modes, phong smoothing, and culling. Injected per-pass via tags
 - **Struct Preservation**: Works with any struct/function naming. Your `Attributes`/`Interpolators` (or `VIn`/`VOut` or whatever you call them) are carried through correctly
-- **HLSLINCLUDE Support**: Structs, CBUFFER, textures, and hook functions can live in HLSLINCLUDE and are handled correctly across all passes
+- **HLSLINCLUDE Support**: Structs, CBUFFER, textures, hook pragmas, and hook function bodies can all live in HLSLINCLUDE and are handled correctly across all passes
 - **Editor Tooling**: Inspector shows parsed shader info, active passes, active tag processors, and detected hooks. Docs window (Tools/ShaderProcessor/Docs) shows all registered hooks, passes, and processors
+- **Automated Tests**: 57 EditMode tests covering pass generation, hooks, tessellation, outlines, CBUFFER handling, and regression cases. Run via Window > General > Test Runner
 
 ## Installation
 
@@ -123,9 +124,9 @@ Feature passes (not included in `[InjectBasePasses]`): `Outline`.
 
 ## Hooks
 
-Hooks let you define functions that automatically propagate to all generated passes. Declare them with pragma directives in your pass, and ShaderGen extracts the function body, rewrites struct names per generated pass, and injects it with the appropriate call.
+Hooks let you define functions that automatically propagate to all generated passes. Declare them with pragma directives and ShaderGen extracts the function body, rewrites struct names per generated pass, and injects it with the appropriate call.
 
-Hook function bodies can live either in the pass (next to the pragma) or in HLSLINCLUDE (shared across passes). Either way works.
+Both the pragma and the function body can live in the pass or in HLSLINCLUDE. Either location works for both.
 
 ### Built-in Hooks
 
@@ -207,14 +208,39 @@ Then use `[InjectPass:MyCustom]` in your shader. Properties and CBUFFER entries 
 
 Tag processors modify existing passes based on SubShader or pass-level tags. They handle things like tessellation where you need to rewrite the vertex entry point and inject hull/domain shaders into every pass.
 
+### Tag Modes
+
+Tags support three modes that control how far the feature propagates:
+
+| Mode | Values | Behavior |
+|------|--------|----------|
+| **Full** | `On`, `True`, `Full` | Applies to the declaring pass(es) AND all generated passes |
+| **Pass** | `Pass` | Applies only to the declaring pass. Generated passes are not affected |
+| **Off** | `Off`, `False`, or absent | Feature disabled |
+
+"Full" is the default and matches the behavior of `On`/`True`. "Pass" is useful when you want a feature on a specific authored pass (like an aura effect with tessellation) without it bleeding into ShadowCaster, DepthOnly, etc.
+
+```hlsl
+// Full mode: tessellation on this pass AND all generated passes
+Pass { Tags { "Tessellation" = "On" } }
+
+// Pass mode: tessellation on this pass ONLY, generated passes are clean
+Pass { Tags { "Tessellation" = "Pass" } }
+```
+
+When declared at the SubShader level, the mode applies to all authored passes. Properties and CBUFFER entries are always injected regardless of mode (the material data is shared), only the pass modification and generated pass replacements are scoped.
+
 ### Tessellation
 
 ```hlsl
-// SubShader level: applies to ALL passes
+// SubShader level: applies to ALL passes and generated passes
 Tags { "Tessellation" = "On" }
 
-// Or pass level: applies to THAT pass only
+// Pass level, full mode: applies to that pass and generated passes
 Pass { Tags { "Tessellation" = "On" } }
+
+// Pass level, pass-only mode: applies to that pass only
+Pass { Tags { "Tessellation" = "Pass" } }
 ```
 
 Tessellation automatically injects properties, CBUFFER entries, a custom material drawer, and hull/domain shaders. Supports multiple modes (Uniform, EdgeLength, Distance, EdgeDistance), Phong smoothing, frustum culling, and backface culling.
@@ -239,14 +265,24 @@ public class MyFeatureProcessor : ShaderTagProcessorBase
 ## Processing Pipeline
 
 ```
-1. ShaderParser.Parse()           -- Extract structs, CBUFFER, textures, hooks, passes
-2. PassInjectorRegistry.Collect() -- Gather material data from active pass injectors
-3. TagProcessorRegistry.Process() -- Run tag processors (properties, CBUFFER, ModifyPass)
-4. ProcessPassMarkers()           -- Generate and insert passes from [Inject] markers
-5. Validate()                     -- Check for missing structs/semantics
+1. ShaderParser.Parse()                                -- Extract structs, CBUFFER, textures, hooks, passes
+2. ShaderPassInjectorRegistry.CollectMaterialEntries() -- Gather material data from active pass injectors
+3. ShaderTagProcessorRegistry.CollectTagProcessorEntries() -- Discover processors, collect material data
+4. InjectProcessorProperties() + InjectProcessorCBuffer() -- Inject ALL accumulated material data into source
+5. ReparseAllPasses() + ModifyTaggedPasses()           -- Reparse, then run ModifyPass (e.g., tessellation)
+6. ProcessPassMarkers()                                -- Generate and insert passes from [Inject] markers
+7. Validate()                                          -- Check for missing structs/semantics
 ```
 
+Stages 2 and 3 both collect into the same fields (`ProcessorPropertiesEntries`, `ProcessorCBufferEntries`). Stage 4 injects everything in one shot, so pass injector and tag processor material data are treated uniformly.
+
 Everything is discovered via TypeCache at editor startup. Hooks, passes, and tag processors are all registered automatically. The Docs window (Tools/ShaderProcessor/Docs) shows everything that's registered.
+
+## Testing
+
+The package includes 57 EditMode tests that run via the Unity Test Runner (Window > General > Test Runner, EditMode tab). Tests call `ShaderProcessor.Process()` on test shader files and assert properties of the output string. No GPU or rendering needed.
+
+Tests cover pass generation, struct naming, CBUFFER duplication logic, hook function prefixing, tessellation injection, outline property injection, individual vs bulk pass injection, template marker cleanup, tag mode scoping, and various regressions found during development.
 
 ## File Structure
 
@@ -282,6 +318,10 @@ Editor/
     ├── Meta.hlsl
     ├── Outline.hlsl
     └── Tessellation.hlsl
+Tests/
+├── FS.ShaderProcessor.Tests.asmdef
+├── ShaderProcessorTests.cs
+├── Test01 through Test16 shader files
 ```
 
 ## Notes
@@ -292,3 +332,4 @@ Editor/
 - Tag processors run in priority order (lower numbers first)
 - Tessellation requires hardware support (DX11+, Metal, Vulkan)
 - Hooks in HLSLINCLUDE are supported. The system extracts the body, rewrites struct names per pass, and prefixes function names to avoid collisions with the HLSLINCLUDE originals
+- Hook pragmas can be declared in either the pass or HLSLINCLUDE

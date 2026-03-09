@@ -26,33 +26,44 @@ namespace FS.Shaders.Editor
                 ShaderDirectory = Path.GetDirectoryName(shaderPath)
             };
             
-            // Stage 1: Full parse of the user's original shader source.
-            // Establishes struct names/fields, function names, CBUFFER content, textures,
-            // hooks, pass list, and forward pass reference.
+            // Stage 1: Parse
+            // Extracts structs, CBUFFER, textures, hooks, passes, and forward pass reference.
             ShaderParser.Parse(ctx);
             
-            // Stage 2: Collect material data from active pass injectors.
-            // Scans for [InjectBasePasses] and [InjectPass:X] markers to determine which
-            // pass injectors are active, then collects their properties and CBUFFER entries
-            // into ProcessorPropertiesEntries/ProcessorCBufferEntries. This runs BEFORE
-            // ProcessAllTags so pass injector material data gets injected into source
-            // alongside tag processor data in the same flow.
+            // Stage 2: Collect material data from pass injectors
+            // Scans for [InjectBasePasses] and [InjectPass:X] markers, collects properties
+            // and CBUFFER entries from active injectors.
             ShaderPassInjectorRegistry.CollectMaterialEntries(ctx);
             
-            // Stage 3: Run tag processors (property/CBUFFER injection, ModifyPass).
-            // Internally this:
-            //   1. Collects tag processor properties/CBUFFER (appended to same fields)
-            //   2. Injects ALL accumulated entries (pass injector + tag processor) into source
-            //   3. Calls ReparseAllPasses for fresh PassInfo with expanded CBUFFER
-            //   4. Runs ModifyPass per-pass (e.g., tessellation injects code into source)
-            //
-            // After this returns, ctx.ForwardPass.HlslProgram is post-CBUFFER but pre-ModifyPass.
-            ShaderTagProcessorRegistry.ProcessAllTags(ctx);
+            // Stage 3: Collect material data from tag processors
+            // Discovers enabled processors, sets feature flags, collects properties
+            // and CBUFFER entries (appended to same fields as pass injector entries).
+            ShaderTagProcessorRegistry.CollectTagProcessorEntries(ctx);
             
-            // Stage 4: Process pass markers and generate passes using the registry.
+            // Stage 4: Inject all accumulated material data into source
+            // Properties and CBUFFER entries from BOTH pass injectors and tag processors
+            // get injected here. This always runs regardless of which sources contributed.
+            ShaderTagProcessorRegistry.InjectProcessorProperties(ctx);
+            ShaderTagProcessorRegistry.InjectProcessorCBuffer(ctx);
+            
+            // Properties entries are now in source, safe to clear.
+            ctx.ProcessorPropertiesEntries = null;
+            
+            // NOTE: Do NOT clear ProcessorCBufferEntries. GenerateCBuffer (called during
+            // pass generation) combines ctx.CBufferContent (from first parse) with
+            // ProcessorCBufferEntries (the delta) to produce complete CBUFFERs for
+            // generated passes.
+            
+            // Stage 5: Reparse and modify passes
+            // Reparse gives ModifyPass fresh HlslProgram content after injection.
+            // ModifyPass runs tag processors on authored passes (e.g., tessellation).
+            ShaderParser.ReparseAllPasses(ctx);
+            ShaderTagProcessorRegistry.ModifyTaggedPasses(ctx);
+            
+            // Stage 6: Generate passes
             ProcessPassMarkers(ctx);
             
-            // Stage 5: Validation
+            // Stage 7: Validation
             ValidateProcessedShader(ctx);
             
             return ctx.ProcessedSource;
