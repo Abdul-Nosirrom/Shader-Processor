@@ -1,0 +1,22 @@
+{
+    "name": "FS.ShaderProcessor.Tests",
+    "rootNamespace": "FS.Shaders.Editor.Tests",
+    "references": [
+        "FS.ShaderProcessor.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

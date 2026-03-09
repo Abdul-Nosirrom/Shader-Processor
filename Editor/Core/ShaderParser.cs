@@ -108,8 +108,8 @@ namespace FS.Shaders.Editor
         static void ParseHlslInclude(ShaderContext ctx)
         {
             var match = Regex.Match(ctx.ProcessedSource,
-                @"HLSLINCLUDE\s*(.*?)\s*ENDHLSL",
-                RegexOptions.Singleline);
+                @"^\s*HLSLINCLUDE\s*(.*?)\s*ENDHLSL",
+                RegexOptions.Singleline | RegexOptions.Multiline);
             
             ctx.HlslIncludeBlock = match.Success ? match.Groups[1].Value : "";
         }

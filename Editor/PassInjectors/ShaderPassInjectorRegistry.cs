@@ -171,32 +171,44 @@ namespace FS.Shaders.Editor
         public static void CollectMaterialEntries(ShaderContext ctx)
         {
             Initialize();
-            
+    
             string source = ctx.ProcessedSource;
-            
+    
             // Determine which injectors are active based on markers in the source
             var activeInjectors = new List<ShaderPassInjector>();
-            
+    
             // [InjectBasePasses] activates all base passes
-            int basePassIdx = source.IndexOf("[InjectBasePasses]", StringComparison.Ordinal);
-            if (basePassIdx >= 0 && !ShaderProcessor.IsInComment(source, basePassIdx))
+            int basePassIdx = 0;
+            while ((basePassIdx = source.IndexOf("[InjectBasePasses]", basePassIdx, StringComparison.Ordinal)) >= 0)
             {
-                foreach (var injector in BasePasses)
-                    activeInjectors.Add(injector);
+                if (!ShaderProcessor.IsInComment(source, basePassIdx))
+                {
+                    foreach (var injector in BasePasses)
+                        activeInjectors.Add(injector);
+                    break;
+                }
+                basePassIdx += "[InjectBasePasses]".Length;
             }
-            
+    
             // [InjectPass:X] activates specific passes
             foreach (var injector in s_Injectors)
             {
                 if (activeInjectors.Contains(injector))
                     continue;
-    
+
                 string marker = $"[InjectPass:{injector.PassName}]";
-                int idx = source.IndexOf(marker, StringComparison.Ordinal);
-                if (idx >= 0 && !ShaderProcessor.IsInComment(source, idx))
-                    activeInjectors.Add(injector);
+                int idx = 0;
+                while ((idx = source.IndexOf(marker, idx, StringComparison.Ordinal)) >= 0)
+                {
+                    if (!ShaderProcessor.IsInComment(source, idx))
+                    {
+                        activeInjectors.Add(injector);
+                        break;
+                    }
+                    idx += marker.Length;
+                }
             }
-            
+    
             // Collect properties and CBUFFER entries from active injectors
             foreach (var injector in activeInjectors)
             {
@@ -205,7 +217,7 @@ namespace FS.Shaders.Editor
                     string props = injector.GetPropertiesEntries(ctx);
                     if (!string.IsNullOrEmpty(props))
                         ctx.ProcessorPropertiesEntries += "\n" + props;
-                    
+            
                     string cbuffer = injector.GetCBufferEntries(ctx);
                     if (!string.IsNullOrEmpty(cbuffer))
                         ctx.ProcessorCBufferEntries += "\n" + cbuffer;
