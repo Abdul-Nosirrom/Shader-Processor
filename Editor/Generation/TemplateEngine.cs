@@ -162,8 +162,13 @@ namespace FS.Shaders.Editor
             replacements["ATTRIBUTES_STRUCT"] = StructGenerator.GenerateAttributesStruct(ctx, attrName);
             replacements["INTERPOLATORS_STRUCT"] = StructGenerator.GenerateInterpolatorsStruct(ctx, interpName);
             
-            // Forward pass content (includes, defines, keywords, helper functions)
-            replacements["FORWARD_CONTENT"] = HookProcessor.ExtractForwardPassContent(ctx, attrName, interpName);
+            // Forward pass content, split into preprocessor and code.
+            // Preprocessor (includes, defines, pragmas) goes above CBUFFER so macros
+            // used in CBUFFER/structs are defined. Code (helper functions) goes below
+            // CBUFFER/textures/structs since it references those declarations.
+            var forwardContent = HookProcessor.ExtractForwardPassContentSplit(ctx, attrName, interpName);
+            replacements["FORWARD_PREPROCESSOR"] = forwardContent.Preprocessor;
+            replacements["FORWARD_CONTENT"] = forwardContent.Content;
             
             // CBUFFER (only if not in HLSLINCLUDE)
             if (!ctx.CBufferInHlslInclude)

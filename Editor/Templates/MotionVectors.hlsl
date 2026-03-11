@@ -22,6 +22,11 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MotionVectorsCommon.hlsl"
     
     // -------------------------------------------------------------------------
+    // Preprocessor from MainPass (includes, defines, keywords)
+    // -------------------------------------------------------------------------
+    {{FORWARD_PREPROCESSOR}}
+    
+    // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
@@ -34,7 +39,7 @@ Pass
     {{INTERPOLATORS_STRUCT}}
 
     // -------------------------------------------------------------------------
-    // Shared body from MainPass
+    // Helper functions from MainPass
     // -------------------------------------------------------------------------
     {{FORWARD_CONTENT}}    
 
@@ -60,6 +65,9 @@ Pass
         
         // Hook: vertex displacement (current frame)
         {{VERTEX_DISPLACEMENT_CALL}}
+        
+        // Injected forward vertex body (interpolator transfers)
+        {{FORWARD_VERTEX_BODY}}
         
         // Current position (after displacement)
         float3 positionWS = TransformObjectToWorld(input.{{POSITION}}.xyz);
@@ -110,15 +118,19 @@ Pass
     {
         UNITY_SETUP_INSTANCE_ID(input);
         
-        // Hook: alpha clipping
-        {{ALPHA_CLIP_CALL}}
+        {{FORWARD_FRAGMENT_BODY}}
         
-        // LOD crossfade support
-        #ifdef LOD_FADE_CROSSFADE
-            LODFadeCrossFade(input.{{SV_POSITION}});
-        #endif
-        
-        return float4(CalcNdcMotionVectorFromCsPositions(input.curPositionCS, input.prevPositionCS), 0, 0);
+        {
+            // Hook: alpha clipping
+            {{ALPHA_CLIP_CALL}}
+            
+            // LOD crossfade support
+            #ifdef LOD_FADE_CROSSFADE
+                LODFadeCrossFade(input.{{SV_POSITION}});
+            #endif
+            
+            return float4(CalcNdcMotionVectorFromCsPositions(input.curPositionCS, input.prevPositionCS), 0, 0);
+        }
     }
     ENDHLSL
 }

@@ -138,19 +138,31 @@ namespace FS.Shaders.Editor
         }
         
         /// <summary>
-        /// Generate Meta-specific Attributes with lightmap UVs.
+        /// Generate Meta-specific Attributes.
+        /// 
+        /// The Meta pass needs TEXCOORD1 (static lightmap UV) and TEXCOORD2 (dynamic lightmap UV)
+        /// for UnityMetaVertexPosition. The template references these via semantic markers
+        /// ({{TEXCOORD1}}, {{TEXCOORD2}}) so existing fields are picked up by name automatically.
+        /// We only add fields for semantics that are genuinely missing from the user's struct.
         /// </summary>
         public static string GenerateMetaAttributes(ShaderContext ctx)
         {
-            var additionalFields = new string[0];
+            var additionalFields = new System.Collections.Generic.List<string>();
             
-            // Only add uv1/uv2 if not already present
+            // Add uv1 if no TEXCOORD1 exists (basic shaders without lightmap UVs)
             if (ctx.Attributes?.HasField("TEXCOORD1") != true)
             {
-                additionalFields = new[] { "float2 uv1 : TEXCOORD1;", "float2 uv2 : TEXCOORD2;" };
+                additionalFields.Add("float2 uv1 : TEXCOORD1;");
             }
             
-            return GenerateAttributesStruct(ctx, "MetaAttributes", additionalFields);
+            // Add uv2 if no TEXCOORD2 exists (most shaders won't have dynamic lightmap UVs)
+            if (ctx.Attributes?.HasField("TEXCOORD2") != true)
+            {
+                additionalFields.Add("float2 uv2 : TEXCOORD2;");
+            }
+            
+            return GenerateAttributesStruct(ctx, "MetaAttributes",
+                additionalFields.Count > 0 ? additionalFields.ToArray() : null);
         }
         
         /// <summary>

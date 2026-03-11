@@ -5,14 +5,15 @@ A Unity URP shader preprocessing system that automatically generates auxiliary p
 ## Features
 
 - **Automatic Pass Generation**: Write your Forward pass once, get ShadowCaster, DepthOnly, DepthNormals, MotionVectors, and Meta passes generated automatically
+- **Forward Body Injection**: Inject your entire vertex and fragment body into generated passes with no hooks needed. The system strips boilerplate, normalizes variable names, rewrites struct types, and swaps return statements per pass. Great for shaders where you just want everything to "work" without defining hooks
 - **Hook System**: Define vertex displacement, interpolator transfer, alpha clip, and tessellation factor override functions that propagate to all generated passes
 - **Pass Injectors**: Data-driven pass definitions. Each pass is a small class + a template. Adding a new pass type requires zero pipeline changes
 - **Tag Processors**: Modular feature injection for things that modify existing passes (like tessellation). Supports Full and Pass scoping modes
 - **Hardware Tessellation**: Full tessellation pipeline with multiple modes, phong smoothing, and culling. Injected per-pass via tags
-- **Struct Preservation**: Works with any struct/function naming. Your `Attributes`/`Interpolators` (or `VIn`/`VOut` or whatever you call them) are carried through correctly
+- **Struct Preservation**: Works with any struct/function/variable naming. Your `Attributes`/`Interpolators` (or `VIn`/`VOut` or whatever you call them) are carried through correctly. Same goes for parameter names like `v`, `o`, `i` instead of `input`/`output`
 - **HLSLINCLUDE Support**: Structs, CBUFFER, textures, hook pragmas, and hook function bodies can all live in HLSLINCLUDE and are handled correctly across all passes
 - **Editor Tooling**: Inspector shows parsed shader info, active passes, active tag processors, and detected hooks. Docs window (Tools/ShaderProcessor/Docs) shows all registered hooks, passes, and processors
-- **Automated Tests**: 57 EditMode tests covering pass generation, hooks, tessellation, outlines, CBUFFER handling, and regression cases. Run via Window > General > Test Runner
+- **Automated Tests**: 79 EditMode tests covering pass generation, hooks, tessellation, outlines, CBUFFER handling, forward body injection, variable name normalization, and regression cases. Run via Window > General > Test Runner
 
 ## Installation
 
@@ -121,6 +122,68 @@ If you only need specific passes:
 Available base passes: `ShadowCaster`, `DepthOnly`, `DepthNormals`, `MotionVectors`, `Meta`.
 
 Feature passes (not included in `[InjectBasePasses]`): `Outline`.
+
+## Forward Body Injection
+
+For shaders where you want the generated passes to share the exact same vertex and fragment logic as your forward pass (interpolator transfers, displacement, normal mapping, alpha clip, etc.) without writing any hook functions, use the `InjectForwardBody` tag:
+
+```hlsl
+SubShader
+{
+    Tags
+    {
+        "RenderType" = "Opaque"
+        "RenderPipeline" = "UniversalPipeline"
+        "InjectForwardBody" = "On"
+    }
+    // ...
+}
+```
+
+### What It Does
+
+**Vertex:** The system extracts your forward vertex function body, strips the boilerplate that templates already handle (struct init, instance ID setup, positionCS assignment, return statement), normalizes variable names to `input`/`output` to match template conventions, rewrites struct type names, and injects the remainder via `{{FORWARD_VERTEX_BODY}}`. What survives is your interpolator assignments (normalWS, tangentWS, UVs, etc.) and any displacement or helper math they depend on. The HLSL compiler's dead code elimination will strip anything a particular pass doesn't actually use.
+
+**Fragment:** The system extracts your forward fragment body, normalizes the input variable name to `input`, rewrites struct type names, and replaces every `return` statement with the pass-specific output. So `return color;` becomes `return input.positionCS.z;` in DepthOnly, `return 0;` in ShadowCaster, etc. Your `clip()` calls, texture samples, and intermediate calculations survive and do the right thing in each pass.
+
+### fragmentOutput Pragmas
+
+Some passes need to reference specific variables from your fragment body. For example, Meta needs your albedo and emission, and DepthNormals needs your computed normal. Declare these with `fragmentOutput` pragmas in your forward pass:
+
+```hlsl
+#pragma fragmentOutput:albedo albedo
+#pragma fragmentOutput:normal computedNormal
+#pragma fragmentOutput:emission emission
+```
+
+The left side (`albedo`, `normal`, `emission`) is a well-known name that pass injectors reference. The right side (`albedo`, `computedNormal`, `emission`) is the actual variable name in your fragment body. This lets the Meta pass build a `MetaInput` using your `albedo` and `emission` variables, and DepthNormals can return your `computedNormal` instead of falling back to the geometric normal.
+
+If the pragmas aren't present, passes fall back to safe defaults (white albedo for Meta, geometric normal for DepthNormals, etc.).
+
+### Variable Naming
+
+You can use whatever variable names you want in your forward pass. The system detects your parameter and output variable names and normalizes them to `input`/`output` before injection. So this works fine:
+
+```hlsl
+Interpolators Vert(Attributes v)
+{
+    Interpolators o = (Interpolators)0;
+    o.normalWS = TransformObjectToWorldNormal(v.normalOS);
+    // ...
+}
+
+half4 Frag(Interpolators i) : SV_Target
+{
+    half4 albedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, i.uv);
+    // ...
+}
+```
+
+### Using Body Injection with Hooks
+
+Forward body injection and hooks can coexist. If your forward pass defines hook functions (via `#pragma vertexDisplacement` etc.) AND has `InjectForwardBody` enabled, the system strips hook calls from the injected body to prevent double-execution. The templates already emit hook calls via their own markers, so things stay clean.
+
+This is useful when you want body injection for interpolator transfers and fragment logic, but also want a `vertexDisplacement` hook for proper motion vector support (see Limitations below).
 
 ## Hooks
 
@@ -278,11 +341,85 @@ Stages 2 and 3 both collect into the same fields (`ProcessorPropertiesEntries`, 
 
 Everything is discovered via TypeCache at editor startup. Hooks, passes, and tag processors are all registered automatically. The Docs window (Tools/ShaderProcessor/Docs) shows everything that's registered.
 
+## Limitations and Things to Be Aware Of
+
+Some things to keep in mind when writing shaders with this system. If something looks wrong in your generated output, check here first.
+
+### Motion Vectors with Vertex Displacement (Forward Body Injection)
+
+This is the main one. When using `InjectForwardBody`, the MotionVectors pass gets your vertex displacement code for the current frame (it's in the injected body), but the previous frame position (`prevPosOS`) does NOT get displaced. The MotionVectors template has a `#ifdef FS_VERTEX_DISPLACEMENT` block that replays displacement on the previous position, but that only works with the hook system since it needs to call the displacement function a second time on different data. Inline body code can't be "called" like that.
+
+**What this means in practice:** If your shader displaces vertices and you have TAA or motion blur enabled, you might see ghosting or smearing artifacts on the displaced geometry. Static geometry and non-displaced shaders are fine.
+
+**The fix:** If you need correct motion vectors with displacement, use a `vertexDisplacement` hook instead of (or alongside) body injection. The hook path properly replays displacement on the previous frame position. Body injection and hooks can coexist, the system strips hook calls from the injected body to prevent double-execution.
+
+Note that this only matters for displacement that moves vertices around. If your forward pass just transfers interpolators (normals, UVs, tangent basis) without any displacement, motion vectors will be fine with body injection alone.
+
+### Displacement That Depends on Computed Interpolators
+
+If you're using the `vertexDisplacement` hook for proper motion vector support, keep in mind that the hook runs before the injected body in the template ordering. So your displacement function only has access to raw input data (positionOS, normalOS, raw uv, etc.). If your displacement needs data that the forward body computes (like transformed UVs from `TRANSFORM_TEX`), you'd need to duplicate that computation inside the hook function or restructure so the displacement only depends on raw input fields.
+
+Most displacement (heightmap sampling at raw UVs, procedural offsets from world position, wave animation) works fine with raw inputs. This only comes up if your displacement samples a texture at a transformed UV or depends on some other intermediate calculation from the vertex body.
+
+### Dead Code in Generated Fragment Shaders
+
+The full forward fragment body gets injected into every auxiliary pass. That means DepthOnly and ShadowCaster fragments will compute normal mapping, lighting, emission, etc. even though they don't use any of it. Only the `clip()` call and the pass-specific return actually matter.
+
+This is fine. The HLSL compiler's dead code elimination strips all of it. The generated output looks noisy but the compiled shader is clean. Same story for the fallback code block after the injected body's return statement, the compiler sees it's unreachable and removes it.
+
+### Fragment Hook Calls in Injected Bodies
+
+If your forward pass uses hook functions (like `#pragma alphaClip DoClip`) and also has `InjectForwardBody` enabled, the system strips hook calls from the injected body. This is correct because the templates already emit hook calls via their own markers (`{{ALPHA_CLIP_CALL}}` etc.), so leaving them in the body would execute the hook twice.
+
+If you see a hook being called twice in generated output, something went wrong with the stripping. Check that your hook function name matches what's in the pragma declaration.
+
+### Variable Naming is Normalized
+
+The system normalizes your vertex input/output parameter names to `input`/`output` and your fragment input parameter name to `input` before injection. This means if you use `v`, `o`, `i`, or any other names, they'll be rewritten in the generated passes. Your original forward pass is untouched.
+
+This is usually invisible, but if you're reading the processed shader output (via "Show Processed Shader" in the inspector) and wondering why your variables changed names in the generated passes, that's why.
+
+### DepthNormals Normal Assignment
+
+The DepthNormals pass needs a world-space normal for the depth-normals buffer. When `InjectForwardBody` is active and your forward vertex body already writes `output.normalWS` (or whatever your normal field is called), the template skips its own geometric normal fallback to avoid clobbering your value. If your forward vertex body doesn't write normals, the template emits `TransformObjectToWorldNormal` as a fallback so the pass still works.
+
+If you're getting flat/faceted normals in your depth normals buffer when you expect smooth or normal-mapped normals, check that your forward vertex body is actually assigning to the normalWS interpolator. If you're using the `fragmentOutput:normal` pragma, the DepthNormals fragment will use your computed normal-mapped normal from the fragment body instead of the vertex-interpolated geometric normal, which is usually what you want.
+
+### fragmentOutput Pragmas Map to a Single Variable
+
+Each `fragmentOutput` pragma maps a well-known name to exactly one variable in your fragment body. When the system swaps return statements for a generated pass, it references that single variable in every return path.
+
+This means if your fragment has multiple variables that represent the same conceptual output and you return them conditionally, only the declared one will be used:
+```hlsl
+#pragma fragmentOutput:normal computedNormal
+
+half4 Frag(Interpolators input) : SV_Target
+{
+    half3 computedNormal = /* ... */;
+    half3 otherNormal = /* ... */;
+
+    if (conditionA)
+        return half4(computedNormal, 1);  // DepthNormals will use computedNormal here (correct)
+    else
+        return half4(otherNormal, 1);     // DepthNormals will STILL use computedNormal here (not otherNormal)
+}
+```
+
+The DepthNormals pass replaces every `return` with `return half4(normalize(computedNormal) * 0.5 + 0.5, depth)` regardless of which branch you're in. It doesn't analyze which variable each return was originally using.
+
+This applies to any pass whose return expression references a `fragmentOutput` variable (primarily Meta and DepthNormals). Passes with trivial returns like DepthOnly (`return depth`) and ShadowCaster (`return 0`) are unaffected since they don't reference any fragment variables.
+
+If you need different normals returned conditionally, compute a single final normal before the return and declare that as your `fragmentOutput:normal`.
+
+### Template Caching
+
+Templates are cached in memory after first load. If you edit a `.hlsl` template file, the changes won't take effect until you either reimport a shader or use `Tools/ShaderProcessor/Reload Templates`. This is usually only relevant if you're developing new passes or modifying the templates themselves.
+
 ## Testing
 
-The package includes 57 EditMode tests that run via the Unity Test Runner (Window > General > Test Runner, EditMode tab). Tests call `ShaderProcessor.Process()` on test shader files and assert properties of the output string. No GPU or rendering needed.
+The package includes 79 EditMode tests that run via the Unity Test Runner (Window > General > Test Runner, EditMode tab). Tests call `ShaderProcessor.Process()` on test shader files and assert properties of the output string. No GPU or rendering needed.
 
-Tests cover pass generation, struct naming, CBUFFER duplication logic, hook function prefixing, tessellation injection, outline property injection, individual vs bulk pass injection, template marker cleanup, tag mode scoping, and various regressions found during development.
+Tests cover pass generation, struct naming, CBUFFER duplication logic, hook function prefixing, tessellation injection, outline property injection, individual vs bulk pass injection, template marker cleanup, tag mode scoping, forward body injection, variable name normalization, fragmentOutput pragma resolution, and various regressions found during development.
 
 ## File Structure
 
@@ -306,7 +443,8 @@ Editor/
 │   └── ShaderHookRegistry.cs      # TypeCache discovery
 ├── TagProcessors/
 │   ├── ShaderTagProcessor.cs      # Interface, base class, registry
-│   └── TessellationProcessor.cs   # Tessellation injection
+│   ├── TessellationProcessor.cs   # Tessellation injection
+│   └── ForwardBodyInjector.cs     # Forward body injection tag processor
 ├── MaterialDrawers/
 │   └── TessellationParameters.cs  # Custom material inspector for tess settings
 ├── ShaderProcessorDocsWindow.cs   # Tools/ShaderProcessor/Docs editor window
@@ -321,7 +459,7 @@ Editor/
 Tests/
 ├── FS.ShaderProcessor.Tests.asmdef
 ├── ShaderProcessorTests.cs
-├── Test01 through Test16 shader files
+├── Test01 through Test18 shader files
 ```
 
 ## Notes
@@ -333,3 +471,4 @@ Tests/
 - Tessellation requires hardware support (DX11+, Metal, Vulkan)
 - Hooks in HLSLINCLUDE are supported. The system extracts the body, rewrites struct names per pass, and prefixes function names to avoid collisions with the HLSLINCLUDE originals
 - Hook pragmas can be declared in either the pass or HLSLINCLUDE
+- Forward body injection runs at priority 200 (after tessellation at 100), so tessellation markers are available when the body gets injected

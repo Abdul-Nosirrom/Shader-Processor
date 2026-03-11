@@ -98,18 +98,42 @@ namespace FS.Shaders.Editor
         //=============================================================================
         
         /// <summary>
-        /// Extract reusable content from Forward pass HLSLPROGRAM.
-        /// Removes vertex/fragment functions, struct declarations, and specific pragmas.
+        /// Result of extracting forward pass content, split into preprocessor
+        /// directives and code so they can be placed at different points in templates.
         /// </summary>
-        public static string ExtractForwardPassContent(ShaderContext ctx, string targetAttrName, string targetInterpName)
+        public struct ForwardContentResult
         {
+            /// <summary>
+            /// Preprocessor directives (#include, #include_with_pragmas, #define, #pragma)
+            /// that need to appear before CBUFFER/textures so macros are available.
+            /// </summary>
+            public string Preprocessor;
+            
+            /// <summary>
+            /// Helper functions, code, and conditional compilation blocks (#ifdef etc.)
+            /// that reference CBUFFER variables and textures.
+            /// </summary>
+            public string Content;
+        }
+        
+        /// <summary>
+        /// Extract reusable content from Forward pass HLSLPROGRAM, split into
+        /// preprocessor directives and code. Preprocessor goes above CBUFFER in
+        /// templates so macros used in CBUFFER/structs are defined. Code goes
+        /// below CBUFFER/textures/structs since it references those declarations.
+        /// </summary>
+        public static ForwardContentResult ExtractForwardPassContentSplit(
+            ShaderContext ctx, string targetAttrName, string targetInterpName)
+        {
+            var result = new ForwardContentResult { Preprocessor = "", Content = "" };
+            
             if (ctx.ForwardPass == null || string.IsNullOrEmpty(ctx.ForwardPass.HlslProgram))
-                return "";
+                return result;
 
             string hlsl = ctx.ForwardPass.HlslProgram;
 
             // =====================================================================
-            // CRITICAL: Strip CBUFFER, textures, and includes BEFORE function removal.
+            // CRITICAL: Strip CBUFFER, textures BEFORE function removal.
             // RemoveFunction's regex uses (\w+\s+)? for optional modifiers, which
             // can greedily match nearby keywords like CBUFFER_END across newlines,
             // eating them as part of the function removal. Stripping the CBUFFER
@@ -124,9 +148,6 @@ namespace FS.Shaders.Editor
             hlsl = Regex.Replace(hlsl, @"SAMPLER\s*\(\s*\w+\s*\)\s*;", "");
             hlsl = Regex.Replace(hlsl, @"TEXTURE2D_ARRAY\s*\(\s*\w+\s*\)\s*;", "");
             hlsl = Regex.Replace(hlsl, @"TEXTURECUBE\s*\(\s*\w+\s*\)\s*;", "");
-
-            // Remove #include statements (template has its own)
-            hlsl = Regex.Replace(hlsl, @"#include\s+""[^""]+""\s*\n?", "");
 
             // Remove pragmas we'll replace
             hlsl = RemovePragmas(hlsl, "vertex", "fragment");
@@ -151,6 +172,9 @@ namespace FS.Shaders.Editor
                 hlsl = Regex.Replace(hlsl, $@"#pragma\s+{Regex.Escape(hook.PragmaName)}\s+\w+\s*\n?", "");
             }
 
+            // Remove fragmentOutput pragmas (used by ForwardBodyInjector, not valid HLSL)
+            hlsl = Regex.Replace(hlsl, @"#pragma\s+fragmentOutput:\w+\s+\w+\s*\n?", "");
+
             // Rewrite struct names (for any remaining references in helper code)
             hlsl = RewriteStructNames(hlsl, ctx.AttributesStructName, targetAttrName,
                 ctx.InterpolatorsStructName, targetInterpName);
@@ -158,10 +182,79 @@ namespace FS.Shaders.Editor
             // Remove stray # or #pragma on their own lines
             hlsl = Regex.Replace(hlsl, @"^\s*#\s*(pragma)?\s*$", "", RegexOptions.Multiline);
 
-            // Clean up multiple blank lines
-            hlsl = Regex.Replace(hlsl, @"\n{3,}", "\n\n");
-
-            return hlsl.Trim();
+            // =====================================================================
+            // Split into preprocessor directives and code.
+            //
+            // Preprocessor: #include, #include_with_pragmas, #define, #pragma
+            //   These need to be above CBUFFER/textures/structs so macros they
+            //   define are available (e.g., COMBAT_PARAMETERS from an include).
+            //
+            // Code: everything else, including #ifdef/#endif/#if/#else/#elif/#undef
+            //   These wrap function bodies and code that references CBUFFER/textures,
+            //   so they must come after those declarations.
+            // =====================================================================
+            var preprocessorLines = new StringBuilder();
+            var codeLines = new StringBuilder();
+            
+            foreach (var line in hlsl.Split('\n'))
+            {
+                string trimmed = line.TrimStart();
+                
+                if (IsPreprocessorSetupDirective(trimmed))
+                {
+                    preprocessorLines.AppendLine(line);
+                }
+                else
+                {
+                    codeLines.AppendLine(line);
+                }
+            }
+            
+            // Clean up multiple blank lines in both outputs
+            string preprocessor = Regex.Replace(preprocessorLines.ToString(), @"\n{3,}", "\n\n").Trim();
+            string content = Regex.Replace(codeLines.ToString(), @"\n{3,}", "\n\n").Trim();
+            
+            result.Preprocessor = preprocessor;
+            result.Content = content;
+            return result;
+        }
+        
+        /// <summary>
+        /// Check if a line is a preprocessor setup directive that needs to appear
+        /// before CBUFFER/textures/structs (defines macros, includes files, sets keywords).
+        /// 
+        /// Returns true for: #include, #include_with_pragmas, #define, #pragma
+        /// Returns false for: #ifdef, #endif, #if, #else, #elif, #undef, #error, #warning
+        /// These conditional/control directives typically wrap code blocks that reference
+        /// CBUFFER variables, so they need to stay with the code.
+        /// </summary>
+        static bool IsPreprocessorSetupDirective(string trimmedLine)
+        {
+            if (!trimmedLine.StartsWith("#"))
+                return false;
+            
+            // These directives set up the compilation environment (defines, includes, keywords)
+            // and must appear before declarations that use them.
+            if (trimmedLine.StartsWith("#include"))      return true;  // covers #include and #include_with_pragmas
+            if (trimmedLine.StartsWith("#define"))        return true;
+            if (trimmedLine.StartsWith("#pragma"))        return true;
+            
+            // Everything else (#ifdef, #endif, #if, #else, #elif, #undef, #error, etc.)
+            // stays with the code since it typically guards code blocks.
+            return false;
+        }
+        
+        /// <summary>
+        /// Legacy method for backward compatibility. Returns just the content portion
+        /// (helper functions and code). For new code, use ExtractForwardPassContentSplit.
+        /// </summary>
+        public static string ExtractForwardPassContent(ShaderContext ctx, string targetAttrName, string targetInterpName)
+        {
+            var split = ExtractForwardPassContentSplit(ctx, targetAttrName, targetInterpName);
+            // Legacy behavior: return everything combined (preprocessor + content)
+            // This preserves behavior for any external code calling this method.
+            string combined = split.Preprocessor + "\n" + split.Content;
+            return Regex.Replace(combined, @"\n{3,}", "\n\n").Trim();
         }
         
         //=============================================================================

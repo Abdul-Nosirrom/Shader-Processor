@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 
 namespace FS.Shaders.Editor.Tests
@@ -264,7 +265,7 @@ namespace FS.Shaders.Editor.Tests
         {
             string output = ProcessTestShader("Test09_EverythingCombined.shader");
             
-            Assert.IsTrue(output.Contains("Name \"Outline\""), "Missing Outline pass");
+            Assert.IsTrue(output.Contains("Name \"Inverse Hull Outlines\""), "Missing Outline pass");
             Assert.IsTrue(output.Contains("Cull Front"), "Outline pass missing Cull Front");
             Assert.IsTrue(output.Contains("_ENABLE_OUTLINES"), "Outline pass missing _ENABLE_OUTLINES keyword");
         }
@@ -703,7 +704,7 @@ namespace FS.Shaders.Editor.Tests
         {
             string output = ProcessTestShader("Test15_OutlineOnly.shader");
             
-            Assert.IsTrue(output.Contains("Name \"Outline\""), "Missing Outline pass");
+            Assert.IsTrue(output.Contains("Name \"Inverse Hull Outlines\""), "Missing Outline pass");
             Assert.IsTrue(output.Contains("Cull Front"), "Outline pass missing Cull Front");
         }
         
@@ -910,6 +911,394 @@ namespace FS.Shaders.Editor.Tests
             var matches = Regex.Matches(output, @"\{\{[A-Z_]+\}\}");
             Assert.AreEqual(0, matches.Count,
                 $"Found unreplaced template markers: {(matches.Count > 0 ? matches[0].Value : "")}");
+        }
+        
+        //=============================================================================
+        // Test 17: Forward Body Injection (Vertex + Fragment)
+        //=============================================================================
+        
+        [Test]
+        public void Test17_AllBasePassesGenerated()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            Assert.IsTrue(output.Contains("Name \"ShadowCaster\""), "Missing ShadowCaster");
+            Assert.IsTrue(output.Contains("Name \"DepthOnly\""), "Missing DepthOnly");
+            Assert.IsTrue(output.Contains("Name \"DepthNormals\""), "Missing DepthNormals");
+            Assert.IsTrue(output.Contains("Name \"MotionVectors\""), "Missing MotionVectors");
+            Assert.IsTrue(output.Contains("Name \"Meta\""), "Missing Meta");
+        }
+        
+        [Test]
+        public void Test17_VertexBodyInjectsUVTransfer()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            // Vertex body should transfer UVs
+            Assert.IsTrue(passContent.Contains("TRANSFORM_TEX"),
+                "DepthOnly vertex should have UV transfer from injected body");
+        }
+        
+        [Test]
+        public void Test17_VertexBodyInjectsNormalTransfer()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthNormals\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            // Vertex body should transfer normalWS
+            Assert.IsTrue(passContent.Contains("TransformObjectToWorldNormal"),
+                "DepthNormals vertex should have normal transfer from injected body");
+        }
+        
+        [Test]
+        public void Test17_VertexBoilerplateStripped()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+    
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int vertIdx = output.IndexOf("DepthOnlyInterpolators DepthOnlyVertex(", passIdx);
+    
+            // Find the end of the vertex function (matching closing brace), not the fragment
+            int braceStart = output.IndexOf('{', vertIdx);
+            int depth = 1;
+            int i = braceStart + 1;
+            while (i < output.Length && depth > 0)
+            {
+                if (output[i] == '{') depth++;
+                else if (output[i] == '}') depth--;
+                i++;
+            }
+            string vertContent = output.Substring(vertIdx, i - vertIdx);
+    
+            // Should not have double instance ID setup
+            int setupCount = Regex.Matches(vertContent, @"UNITY_SETUP_INSTANCE_ID").Count;
+            Assert.AreEqual(1, setupCount,
+                "Vertex should have exactly one UNITY_SETUP_INSTANCE_ID (template's, not injected)");
+        }
+        
+        [Test]
+        public void Test17_FragmentBodyInjectedWithClip()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            Assert.IsTrue(passContent.Contains("SAMPLE_TEXTURE2D(_BaseMap"),
+                "DepthOnly fragment should have injected _BaseMap sampling");
+            Assert.IsTrue(passContent.Contains("clip("),
+                "DepthOnly fragment should have clip() from injected body");
+        }
+        
+        [Test]
+        public void Test17_FragmentReturnsSwapped()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            Assert.IsFalse(passContent.Contains("return color;"),
+                "Forward's original return should be swapped out");
+            Assert.IsTrue(passContent.Contains("return input.positionCS.z;"),
+                "DepthOnly should return depth value");
+        }
+        
+        [Test]
+        public void Test17_ShadowCasterReturnsZero()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"ShadowCaster\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            Assert.IsTrue(passContent.Contains("clip("),
+                "ShadowCaster should have clip() from injected body");
+            Assert.IsTrue(passContent.Contains("return 0;"),
+                "ShadowCaster should return 0");
+        }
+        
+        [Test]
+        public void Test17_StructNamesRewrittenInBothBodies()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            // The injected bodies should not reference the original struct names as types
+            Assert.IsFalse(Regex.IsMatch(passContent, @"\(Interpolators\)"),
+                "Injected body should not cast to original 'Interpolators'");
+        }
+        
+        [Test]
+        public void Test17_MetaUsesOutputPragmas()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"Meta\"");
+            Assert.IsTrue(passIdx >= 0, "Missing Meta pass");
+            
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            Assert.IsTrue(passContent.Contains("albedo.rgb"),
+                "Meta should reference 'albedo' from fragmentOutput pragma");
+            Assert.IsTrue(passContent.Contains("_mi.Emission = emission"),
+                "Meta should reference 'emission' from fragmentOutput pragma");
+        }
+        
+        [Test]
+        public void Test17_DepthNormalsUsesComputedNormal()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthNormals\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            Assert.IsTrue(passContent.Contains("normalize(computedNormal)"),
+                "DepthNormals should use 'computedNormal' from fragmentOutput:normal pragma");
+        }
+        
+        [Test]
+        public void Test17_MetaVertexHasUVTransfer()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            int passIdx = output.IndexOf("Name \"Meta\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            Assert.IsTrue(passContent.Contains("TRANSFORM_TEX"),
+                "Meta vertex should have UV transfer from injected body");
+        }
+        
+        [Test]
+        public void Test17_NoUnreplacedTemplateMarkers()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            var matches = Regex.Matches(output, @"\{\{[A-Z_]+\}\}");
+            Assert.AreEqual(0, matches.Count,
+                $"Found unreplaced template markers: {(matches.Count > 0 ? matches[0].Value : "")}");
+        }
+        
+        [Test]
+        public void Test17_FragmentOutputPragmasStrippedFromContent()
+        {
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            
+            // fragmentOutput pragmas should not appear in generated passes
+            // (they're stripped from FORWARD_CONTENT)
+            int depthOnlyIdx = output.IndexOf("Name \"DepthOnly\"");
+            int endHlsl = output.IndexOf("ENDHLSL", depthOnlyIdx);
+            string passContent = output.Substring(depthOnlyIdx, endHlsl - depthOnlyIdx);
+            
+            Assert.IsFalse(passContent.Contains("fragmentOutput:"),
+                "fragmentOutput pragmas should be stripped from generated pass content");
+        }
+        
+        //=============================================================================
+        // Test 18: Forward Body Injection with Custom Variable Names
+        //
+        // Verifies that non-standard variable names (v/o/i instead of input/output)
+        // are normalized to match template conventions before injection.
+        //=============================================================================
+        
+        
+        [Test]
+        public void Test18_AllBasePassesGenerated()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            Assert.IsTrue(output.Contains("Name \"ShadowCaster\""), "Missing ShadowCaster");
+            Assert.IsTrue(output.Contains("Name \"DepthOnly\""), "Missing DepthOnly");
+            Assert.IsTrue(output.Contains("Name \"DepthNormals\""), "Missing DepthNormals");
+            Assert.IsTrue(output.Contains("Name \"MotionVectors\""), "Missing MotionVectors");
+            Assert.IsTrue(output.Contains("Name \"Meta\""), "Missing Meta");
+        }
+        
+        [Test]
+        public void Test18_VertexBodyUsesNormalizedOutputName()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            // Extract DepthOnly vertex function body
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int vertIdx = output.IndexOf("DepthOnlyInterpolators DepthOnlyVertex(", passIdx);
+            int braceStart = output.IndexOf('{', vertIdx);
+            int depth = 1;
+            int i = braceStart + 1;
+            while (i < output.Length && depth > 0)
+            {
+                if (output[i] == '{') depth++;
+                else if (output[i] == '}') depth--;
+                i++;
+            }
+            string vertContent = output.Substring(braceStart, i - braceStart);
+            
+            // The injected body should use 'output.' not 'o.'
+            Assert.IsTrue(vertContent.Contains("output.normalWS"),
+                "Injected vertex body should use normalized 'output' variable name");
+            Assert.IsFalse(Regex.IsMatch(vertContent, @"\bo\.normalWS\b"),
+                "Injected vertex body should NOT contain original 'o.' variable references");
+        }
+        
+        [Test]
+        public void Test18_VertexBodyUsesNormalizedInputName()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            // Extract DepthOnly vertex function body
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int vertIdx = output.IndexOf("DepthOnlyInterpolators DepthOnlyVertex(", passIdx);
+            int braceStart = output.IndexOf('{', vertIdx);
+            int depth = 1;
+            int i = braceStart + 1;
+            while (i < output.Length && depth > 0)
+            {
+                if (output[i] == '{') depth++;
+                else if (output[i] == '}') depth--;
+                i++;
+            }
+            string vertContent = output.Substring(braceStart, i - braceStart);
+            
+            // The injected body should use 'input.' not 'v.'
+            Assert.IsTrue(vertContent.Contains("input.normalOS"),
+                "Injected vertex body should use normalized 'input' variable name");
+            Assert.IsFalse(Regex.IsMatch(vertContent, @"\bv\.normalOS\b"),
+                "Injected vertex body should NOT contain original 'v.' variable references");
+        }
+        
+        [Test]
+        public void Test18_FragmentBodyUsesNormalizedInputName()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            // Fragment body should use 'input.' not 'i.'
+            Assert.IsTrue(passContent.Contains("input.uv"),
+                "Injected fragment body should use normalized 'input' variable name");
+            Assert.IsFalse(Regex.IsMatch(passContent, @"\bi\.uv\b"),
+                "Injected fragment body should NOT contain original 'i.' variable references");
+        }
+        
+        [Test]
+        public void Test18_FragmentReturnsSwappedCorrectly()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            Assert.IsFalse(passContent.Contains("return color;"),
+                "Forward's original return should be swapped out");
+            Assert.IsTrue(passContent.Contains("return input.positionCS.z;"),
+                "DepthOnly should return depth value using normalized 'input' name");
+        }
+        
+        [Test]
+        public void Test18_MetaUsesOutputPragmasWithNormalizedNames()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            int passIdx = output.IndexOf("Name \"Meta\"");
+            Assert.IsTrue(passIdx >= 0, "Missing Meta pass");
+            
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            // Meta fragment should reference pragmas with normalized input name
+            Assert.IsTrue(passContent.Contains("input.uv"),
+                "Meta fragment should use normalized 'input' for UV access");
+            Assert.IsTrue(passContent.Contains("albedo.rgb"),
+                "Meta should reference 'albedo' from fragmentOutput pragma");
+        }
+        
+        [Test]
+        public void Test18_DepthNormalsUsesComputedNormal()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthNormals\"");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            string passContent = output.Substring(passIdx, endHlsl - passIdx);
+            
+            // Should use computed normal from pragma, with normalized input name
+            Assert.IsTrue(passContent.Contains("normalize(computedNormal)"),
+                "DepthNormals should use 'computedNormal' from fragmentOutput:normal pragma");
+            Assert.IsTrue(passContent.Contains("input.tangentWS"),
+                "DepthNormals fragment should use normalized 'input' name");
+        }
+        
+        [Test]
+        public void Test18_BoilerplateStrippedWithCustomNames()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            
+            int passIdx = output.IndexOf("Name \"DepthOnly\"");
+            int vertIdx = output.IndexOf("DepthOnlyInterpolators DepthOnlyVertex(", passIdx);
+            int braceStart = output.IndexOf('{', vertIdx);
+            int depth = 1;
+            int i = braceStart + 1;
+            while (i < output.Length && depth > 0)
+            {
+                if (output[i] == '{') depth++;
+                else if (output[i] == '}') depth--;
+                i++;
+            }
+            string vertContent = output.Substring(vertIdx, i - vertIdx);
+            
+            // Instance ID setup should appear exactly once (from template, not injected)
+            int setupCount = Regex.Matches(vertContent, @"UNITY_SETUP_INSTANCE_ID").Count;
+            Assert.AreEqual(1, setupCount,
+                "Vertex should have exactly one UNITY_SETUP_INSTANCE_ID (template's, not injected)");
+        }
+        
+        [Test]
+        public void Test18_NoUnreplacedTemplateMarkers()
+        {
+            string output = ProcessTestShader("Test18_ForwardBodyInjection_CustomVarNames.shader");
+            var matches = Regex.Matches(output, @"\{\{[A-Z_]+\}\}");
+            Assert.AreEqual(0, matches.Count,
+                $"Found unreplaced template markers: {(matches.Count > 0 ? matches[0].Value : "")}");
+        }
+        
+        //=============================================================================
+        // Test Compiling: Test that all the shaders compile correctly
+        //=============================================================================
+        static string[] AllTestShaders = new[]
+        {
+            "Test01_StructsInHLSLINCLUDE.shader",
+            "Test02_VertexFuncInHLSLINCLUDE.shader",
+            // ... all of them
+            "Test18_ForwardBodyInjection_CustomVarNames.shader",
+        };
+
+        [Test]
+        public void AllTestShaders_CompileWithoutErrors([ValueSource(nameof(AllTestShaders))] string testFile)
+        {
+            // TODO: May need to wait a frame or trigger compilation somehow, not working as is
+            string output = ProcessTestShader(testFile);
+            Shader shader = ShaderUtil.CreateShaderAsset(output, false);
+            Assert.IsFalse(ShaderUtil.ShaderHasError(shader),
+                $"{testFile} has compilation errors after processing");
+            Object.DestroyImmediate(shader);
         }
     }
 }

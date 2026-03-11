@@ -20,6 +20,11 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MetaInput.hlsl"
     
     // -------------------------------------------------------------------------
+    // Preprocessor from MainPass (includes, defines, keywords)
+    // -------------------------------------------------------------------------
+    {{FORWARD_PREPROCESSOR}}
+    
+    // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
@@ -32,7 +37,7 @@ Pass
     {{INTERPOLATORS_STRUCT}}
 
     // -------------------------------------------------------------------------
-    // Shared body from MainPass
+    // Helper functions from MainPass
     // -------------------------------------------------------------------------
     {{FORWARD_CONTENT}}    
 
@@ -47,7 +52,10 @@ Pass
         UNITY_SETUP_INSTANCE_ID(input);
         UNITY_TRANSFER_INSTANCE_ID(input, output);
         
-        output.{{SV_POSITION}} = UnityMetaVertexPosition(input.{{POSITION}}.xyz, input.uv1, input.uv2, unity_LightmapST, unity_DynamicLightmapST);
+        // Injected forward vertex body (interpolator transfers)
+        {{FORWARD_VERTEX_BODY}}
+        
+        output.{{SV_POSITION}} = UnityMetaVertexPosition(input.{{POSITION}}.xyz, input.{{TEXCOORD1}}, input.{{TEXCOORD2}}, unity_LightmapST, unity_DynamicLightmapST);
         
         return output;
     }
@@ -59,16 +67,20 @@ Pass
     {
         UNITY_SETUP_INSTANCE_ID(input);
         
-        // Sample base color for meta pass (lightmap baking)
-        // TODO: Sample _BaseMap if available
-        half4 albedo = half4(1, 1, 1, 1);
+        {{FORWARD_FRAGMENT_BODY}}
         
-        MetaInput metaInput = (MetaInput)0;
-        metaInput.Albedo = albedo.rgb;
-        metaInput.Emission = half3(0, 0, 0);
-        //metaInput.SpecularColor = half3(0, 0, 0);
-        
-        return UnityMetaFragment(metaInput);
+        {
+            // Sample base color for meta pass (lightmap baking)
+            // TODO: Sample _BaseMap if available
+            half4 albedo = half4(1, 1, 1, 1);
+            
+            MetaInput metaInput = (MetaInput)0;
+            metaInput.Albedo = albedo.rgb;
+            metaInput.Emission = half3(0, 0, 0);
+            //metaInput.SpecularColor = half3(0, 0, 0);
+            
+            return UnityMetaFragment(metaInput);
+        }
     }
     ENDHLSL
 }

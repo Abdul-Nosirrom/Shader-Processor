@@ -3,9 +3,9 @@
 // =====================================================================
 Pass
 {
-    Name "Outline"
-    Tags { "LightMode" = "SRPDefaultUnlit" }
-    ZWrite On
+    Name "Inverse Hull Outlines"
+    Tags { "LightMode" = "InverseHull" }
+    ZWrite Off
     ZTest LEqual
     Cull Front
 
@@ -22,6 +22,11 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     
     // -------------------------------------------------------------------------
+    // Preprocessor from MainPass (includes, defines, keywords)
+    // -------------------------------------------------------------------------
+    {{FORWARD_PREPROCESSOR}}
+    
+    // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
@@ -34,7 +39,7 @@ Pass
     {{INTERPOLATORS_STRUCT}}
 
     // -------------------------------------------------------------------------
-    // Shared body from MainPass
+    // Helper functions from MainPass
     // -------------------------------------------------------------------------
     {{FORWARD_CONTENT}}    
 
@@ -52,18 +57,21 @@ Pass
     {
         OutlineInterpolators output = (OutlineInterpolators)0;
         
+        #ifdef _ENABLE_OUTLINES
         UNITY_SETUP_INSTANCE_ID(input);
         UNITY_TRANSFER_INSTANCE_ID(input, output);
         
         // Hook: vertex displacement
         {{VERTEX_DISPLACEMENT_CALL}}
         
+        // Injected forward vertex body (interpolator transfers)
+        {{FORWARD_VERTEX_BODY}}
+        
         // Expand along normal for outline effect
-        #ifdef _ENABLE_OUTLINES
-        input.{{POSITION}}.xyz += input.{{NORMAL}} * _OutlineWidth * 0.01;
-        #endif
+        input.{{POSITION}}.xyz += input.{{NORMAL}} * _OutlineWidth;
         
         output.{{SV_POSITION}} = TransformObjectToHClip(input.{{POSITION}}.xyz);
+        #endif
         
         return output;
     }
@@ -78,9 +86,9 @@ Pass
     // -------------------------------------------------------------------------
     half4 OutlineFragment(OutlineInterpolators input) : SV_TARGET
     {
-        UNITY_SETUP_INSTANCE_ID(input);
-        
         #ifdef _ENABLE_OUTLINES
+        UNITY_SETUP_INSTANCE_ID(input);
+        {{FORWARD_FRAGMENT_BODY}}
         return _OutlineColor;
         #else
         discard;

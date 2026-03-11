@@ -475,25 +475,14 @@ namespace FS.Shaders.Editor
         {
             var fields = new List<StructField>();
             var lines = body.Split('\n');
-            
+    
             foreach (var rawLine in lines)
             {
                 string line = rawLine.Trim();
                 if (string.IsNullOrEmpty(line) || line.StartsWith("//"))
                     continue;
-                
-                // Check for macros like UNITY_VERTEX_INPUT_INSTANCE_ID
-                if (Regex.IsMatch(line, @"^UNITY_\w+"))
-                {
-                    fields.Add(new StructField
-                    {
-                        IsMacro = true,
-                        RawLine = line.TrimEnd(';').Trim()
-                    });
-                    continue;
-                }
-                
-                // Parse: type name : SEMANTIC;
+        
+                // Try to parse as a typed field: type name : SEMANTIC;
                 var match = Regex.Match(line, @"(\w+)\s+(\w+)\s*:\s*(\w+)\s*;?");
                 if (match.Success)
                 {
@@ -506,8 +495,18 @@ namespace FS.Shaders.Editor
                         RawLine = line
                     });
                 }
+                else
+                {
+                    // Anything that isn't a typed field is treated as a macro
+                    // (UNITY_VERTEX_INPUT_INSTANCE_ID, DECLARE_LIGHTMAP_OR_SH(...), etc.)
+                    fields.Add(new StructField
+                    {
+                        IsMacro = true,
+                        RawLine = line
+                    });
+                }
             }
-            
+    
             return fields;
         }
         

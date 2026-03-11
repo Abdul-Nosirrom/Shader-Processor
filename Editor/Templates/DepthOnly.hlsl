@@ -21,6 +21,11 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     
     // -------------------------------------------------------------------------
+    // Preprocessor from MainPass (includes, defines, keywords)
+    // -------------------------------------------------------------------------
+    {{FORWARD_PREPROCESSOR}}
+    
+    // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
@@ -33,7 +38,7 @@ Pass
     {{INTERPOLATORS_STRUCT}}
 
     // -------------------------------------------------------------------------
-    // Shared body from MainPass
+    // Helper functions from MainPass
     // -------------------------------------------------------------------------
     {{FORWARD_CONTENT}}    
 
@@ -57,6 +62,9 @@ Pass
         // Hook: vertex displacement
         {{VERTEX_DISPLACEMENT_CALL}}
         
+        // Injected forward vertex body (interpolator transfers)
+        {{FORWARD_VERTEX_BODY}}
+        
         output.{{SV_POSITION}} = TransformObjectToHClip(input.{{POSITION}}.xyz);
         
         // Hook: transfer extra interpolators
@@ -77,10 +85,14 @@ Pass
     {
         UNITY_SETUP_INSTANCE_ID(input);
         
-        // Hook: alpha clipping
-        {{ALPHA_CLIP_CALL}}
+        {{FORWARD_FRAGMENT_BODY}}
         
-        return input.{{SV_POSITION}}.z;
+        {
+            // Hook: alpha clipping
+            {{ALPHA_CLIP_CALL}}
+            
+            return input.{{SV_POSITION}}.z;
+        }
     }
     ENDHLSL
 }

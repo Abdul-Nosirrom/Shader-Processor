@@ -24,6 +24,11 @@ Pass
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
     
     // -------------------------------------------------------------------------
+    // Preprocessor from MainPass (includes, defines, keywords)
+    // -------------------------------------------------------------------------
+    {{FORWARD_PREPROCESSOR}}
+    
+    // -------------------------------------------------------------------------
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
@@ -40,7 +45,7 @@ Pass
     {{INTERPOLATORS_STRUCT}}
 
     // -------------------------------------------------------------------------
-    // Shared body from MainPass
+    // Helper functions from MainPass
     // -------------------------------------------------------------------------
     {{FORWARD_CONTENT}}    
 
@@ -63,6 +68,9 @@ Pass
         
         // Hook: vertex displacement
         {{VERTEX_DISPLACEMENT_CALL}}
+        
+        // Injected forward vertex body (interpolator transfers)
+        {{FORWARD_VERTEX_BODY}}
         
         // Calculate shadow-biased position
         float3 positionWS = TransformObjectToWorld(input.{{POSITION}}.xyz);
@@ -94,10 +102,14 @@ Pass
     {
         UNITY_SETUP_INSTANCE_ID(input);
         
-        // Hook: alpha clipping
-        {{ALPHA_CLIP_CALL}}
+        {{FORWARD_FRAGMENT_BODY}}
         
-        return 0;
+        {
+            // Hook: alpha clipping
+            {{ALPHA_CLIP_CALL}}
+            
+            return 0;
+        }
     }
     ENDHLSL
 }

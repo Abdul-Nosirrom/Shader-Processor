@@ -66,5 +66,22 @@ namespace FS.Shaders.Editor
         /// Return null if no additional replacements needed.
         /// </summary>
         public virtual Dictionary<string, string> GetAdditionalReplacements(ShaderContext ctx) => null;
+        
+        /// <summary>
+        /// The return statement(s) to replace each 'return ...;' in the forward fragment
+        /// body when injected into this pass. Used by the InjectForwardBody tag processor.
+        ///
+        /// Supports two reference types (resolved before injection):
+        ///   {{SV_POSITION}}, {{NORMAL_WS}}     — struct field names by semantic
+        ///   {{output:albedo}}, {{output:normal}} — variable names from #pragma fragmentOutput
+        ///
+        /// Return null to skip fragment injection for this pass entirely.
+        /// </summary>
+        /// <param name="ctx">The shader context.</param>
+        /// <param name="isFallback">
+        /// True when one or more {{output:X}} references can't be resolved from pragmas.
+        /// Provide a safe expression that doesn't depend on pragma variables.
+        /// </param>
+        public virtual string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback) => null;
     }
 }
