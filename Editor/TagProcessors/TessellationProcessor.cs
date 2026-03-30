@@ -67,7 +67,6 @@ namespace FS.Shaders.Editor
                 ["TESS_CONTROL_POINT_FIELDS"] = fieldGeneration.ControlPointFields,
                 ["TESS_VERTEX_BODY"] = fieldGeneration.VertexBody,
                 ["DOMAIN_INTERPOLATION"] = fieldGeneration.DomainInterpolation,
-                ["DOMAIN_INTERPOLATION_PASSTHROUGH"] = fieldGeneration.DomainInterpolationPassthrough,
             };
             
             TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName, pass.Name ?? "");
@@ -98,14 +97,13 @@ namespace FS.Shaders.Editor
                 "#pragma vertex TessVertex"
             );
             
-            // Find the end of the fragment function to inject tessellation code after it
-            int lastBraceIndex = newHlslContent.LastIndexOf('}');
-            if (lastBraceIndex > 0)
-            {
-                newHlslContent = newHlslContent.Substring(0, lastBraceIndex + 1) 
-                    + "\n\n" + tessCode + "\n"
-                    + newHlslContent.Substring(lastBraceIndex + 1);
-            }
+            // Append tessellation code at the end of the HLSL content.
+            // This places it after all preprocessor #endif directives, at the
+            // top level of the HLSL program - right before ENDHLSL. Using
+            // LastIndexOf('}') would inject inside whichever conditional block
+            // contains the last function, breaking shaders that use #if guards
+            // around vert/frag (e.g., outline discard patterns).
+            newHlslContent = newHlslContent.TrimEnd() + "\n\n" + tessCode + "\n";
             
             // Index-based replacement instead of string.Replace (avoids hitting duplicates)
             ctx.ProcessedSource = ctx.ProcessedSource.Substring(0, hlslContentIdx)
@@ -139,7 +137,6 @@ namespace FS.Shaders.Editor
                 ["TESS_CONTROL_POINT_FIELDS"] = fieldGeneration.ControlPointFields,
                 ["TESS_VERTEX_BODY"] = fieldGeneration.VertexBody,
                 ["DOMAIN_INTERPOLATION"] = fieldGeneration.DomainInterpolation,
-                ["DOMAIN_INTERPOLATION_PASSTHROUGH"] = fieldGeneration.DomainInterpolationPassthrough,
             };
 
             TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName, passName);
@@ -163,7 +160,6 @@ namespace FS.Shaders.Editor
             public string ControlPointFields;
             public string VertexBody;
             public string DomainInterpolation;
-            public string DomainInterpolationPassthrough;
         }
         
         FieldGenerationResult GenerateFieldCode(StructDefinition attributes, string attrName)
@@ -171,7 +167,6 @@ namespace FS.Shaders.Editor
             var controlPointFields = new StringBuilder();
             var vertexBody = new StringBuilder();
             var domainInterp = new StringBuilder();
-            var domainInterpPassthrough = new StringBuilder();
             
             if (attributes?.Fields == null)
             {
@@ -179,12 +174,31 @@ namespace FS.Shaders.Editor
                 return GenerateFallbackFields();
             }
             
+            // Track current guard across all three output buffers
+            string activeGuard = null;
+            
             foreach (var field in attributes.Fields)
             {
-                Debug.Log($"[TessGen] Field: Name={field.Name}, Semantic={field.Semantic}, IsMacro={field.IsMacro}, RawLine={field.RawLine}");
-                
                 // Skip macros like UNITY_VERTEX_INPUT_INSTANCE_ID
                 if (field.IsMacro) continue;
+                
+                // Close previous guard if it changed
+                if (activeGuard != null && activeGuard != field.PreprocessorGuard)
+                {
+                    controlPointFields.AppendLine("#endif");
+                    vertexBody.AppendLine("#endif");
+                    domainInterp.AppendLine("#endif");
+                    activeGuard = null;
+                }
+                
+                // Open new guard if needed
+                if (field.PreprocessorGuard != null && activeGuard != field.PreprocessorGuard)
+                {
+                    controlPointFields.AppendLine(field.PreprocessorGuard);
+                    vertexBody.AppendLine(field.PreprocessorGuard);
+                    domainInterp.AppendLine(field.PreprocessorGuard);
+                    activeGuard = field.PreprocessorGuard;
+                }
                 
                 // Generate TessControlPoint field
                 string semantic = GetTessControlPointSemantic(field.Semantic);
@@ -193,13 +207,17 @@ namespace FS.Shaders.Editor
                 // Generate TessVertex copy
                 vertexBody.AppendLine($"    o.{field.Name} = input.{field.Name};");
                 
-                // Generate Domain interpolation (full tessellation)
+                // Generate Domain interpolation
                 string interp = GetInterpolationCode(field);
                 domainInterp.AppendLine($"    input.{field.Name} = {interp};");
-                
-                // Generate Domain interpolation (passthrough)
-                string interpPassthrough = GetInterpolationCodePassthrough(field);
-                domainInterpPassthrough.AppendLine($"    input.{field.Name} = {interpPassthrough};");
+            }
+            
+            // Close any trailing guard
+            if (activeGuard != null)
+            {
+                controlPointFields.AppendLine("#endif");
+                vertexBody.AppendLine("#endif");
+                domainInterp.AppendLine("#endif");
             }
             
             return new FieldGenerationResult
@@ -207,29 +225,22 @@ namespace FS.Shaders.Editor
                 ControlPointFields = controlPointFields.ToString(),
                 VertexBody = vertexBody.ToString(),
                 DomainInterpolation = domainInterp.ToString(),
-                DomainInterpolationPassthrough = domainInterpPassthrough.ToString(),
             };
         }
         
         FieldGenerationResult GenerateFallbackFields()
         {
+            // Must match StructGenerator's fallback: positionOS, normalOS, uv
             return new FieldGenerationResult
             {
                 ControlPointFields = @"    float4 positionOS : INTERNALTESSPOS;
     float3 normalOS : NORMAL;
-    float4 tangentOS : TANGENT;
     float2 uv : TEXCOORD0;",
                 VertexBody = @"    o.positionOS = input.positionOS;
     o.normalOS = input.normalOS;
-    o.tangentOS = input.tangentOS;
     o.uv = input.uv;",
                 DomainInterpolation = @"    input.positionOS = float4(BARY_INTERP(positionOS.xyz), 1);
     input.normalOS = normalize(BARY_INTERP(normalOS));
-    input.tangentOS = float4(normalize(BARY_INTERP(tangentOS.xyz)), patch[0].tangentOS.w);
-    input.uv = BARY_INTERP(uv);",
-                DomainInterpolationPassthrough = @"    input.positionOS = float4(BARY_INTERP(positionOS.xyz), 1);
-    input.normalOS = normalize(BARY_INTERP(normalOS));
-    input.tangentOS = float4(normalize(BARY_INTERP(tangentOS.xyz)), patch[0].tangentOS.w);
     input.uv = BARY_INTERP(uv);",
             };
         }
@@ -269,33 +280,6 @@ namespace FS.Shaders.Editor
             
             // Everything else - simple barycentric interpolation
             return $"BARY_INTERP({name})";
-        }
-        
-        string GetInterpolationCodePassthrough(StructField field)
-        {
-            string name = field.Name;
-            string semantic = field.Semantic?.ToUpperInvariant() ?? "";
-            
-            // Position - interpolate xyz, keep w=1
-            if (semantic == "POSITION")
-            {
-                return $"float4(patch[0].{name}.xyz * bary.x + patch[1].{name}.xyz * bary.y + patch[2].{name}.xyz * bary.z, 1)";
-            }
-            
-            // Normal - interpolate and normalize
-            if (semantic == "NORMAL")
-            {
-                return $"normalize(patch[0].{name} * bary.x + patch[1].{name} * bary.y + patch[2].{name} * bary.z)";
-            }
-            
-            // Tangent - interpolate xyz and normalize, preserve w
-            if (semantic == "TANGENT")
-            {
-                return $"float4(normalize(patch[0].{name}.xyz * bary.x + patch[1].{name}.xyz * bary.y + patch[2].{name}.xyz * bary.z), patch[0].{name}.w)";
-            }
-            
-            // Everything else - simple interpolation
-            return $"patch[0].{name} * bary.x + patch[1].{name} * bary.y + patch[2].{name} * bary.z";
         }
     }
 }

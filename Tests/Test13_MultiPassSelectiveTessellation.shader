@@ -52,7 +52,7 @@ Shader "Tests/13_MultiPassSelectiveTessellation"
         ENDHLSL
 
         // =====================================================================
-        // Pass 1: Forward — HAS tessellation
+        // Pass 1: Forward - HAS tessellation
         // =====================================================================
         Pass
         {
@@ -88,7 +88,7 @@ Shader "Tests/13_MultiPassSelectiveTessellation"
         }
 
         // =====================================================================
-        // Pass 2: CustomLit — HAS tessellation
+        // Pass 2: CustomLit - HAS tessellation
         // =====================================================================
         Pass
         {
@@ -123,7 +123,7 @@ Shader "Tests/13_MultiPassSelectiveTessellation"
         }
 
         // =====================================================================
-        // Pass 3: Debug — NO tessellation
+        // Pass 3: Debug - NO tessellation
         // =====================================================================
         Pass
         {

@@ -83,7 +83,7 @@ namespace FS.Shaders.Editor
                     // Normalize variable names to match what BuildVertexBody will produce,
                     // so we can reliably check for 'output.normalWS'
                     string userInputName = ForwardBodyInjector.DetectParameterName(
-                        ctx.ForwardPass?.HlslProgram, ctx.ForwardVertexFunctionName) ?? "input";
+                        ctx.ReferencePass?.HlslProgram, ctx.ReferenceVertexFunctionName) ?? "input";
                     string userOutputName = ForwardBodyInjector.DetectOutputVariableName(
                         vertexBody, ctx.InterpolatorsStructName) ?? "output";
                     vertexBody = ForwardBodyInjector.NormalizeVariableNames(

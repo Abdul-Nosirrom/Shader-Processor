@@ -14,9 +14,6 @@ Pass
     {{VERTEX_PRAGMA}}
     #pragma fragment DepthNormalsFragment
     
-    #pragma multi_compile_instancing
-    #pragma multi_compile _ DOTS_INSTANCING_ON
-    
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     
     // -------------------------------------------------------------------------
@@ -84,7 +81,7 @@ Pass
     // -------------------------------------------------------------------------
     // Fragment
     // -------------------------------------------------------------------------
-    half4 DepthNormalsFragment(DepthNormalsInterpolators input) : SV_TARGET
+    half4 DepthNormalsFragment(DepthNormalsInterpolators input{{EXTRA_FRAG_PARAMS}}) : SV_TARGET
     {
         UNITY_SETUP_INSTANCE_ID(input);
         

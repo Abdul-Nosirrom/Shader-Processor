@@ -72,8 +72,8 @@ namespace FS.Shaders.Editor
         /// body when injected into this pass. Used by the InjectForwardBody tag processor.
         ///
         /// Supports two reference types (resolved before injection):
-        ///   {{SV_POSITION}}, {{NORMAL_WS}}     — struct field names by semantic
-        ///   {{output:albedo}}, {{output:normal}} — variable names from #pragma fragmentOutput
+        ///   {{SV_POSITION}}, {{NORMAL_WS}}     - struct field names by semantic
+        ///   {{output:albedo}}, {{output:normal}} - variable names from #pragma fragmentOutput
         ///
         /// Return null to skip fragment injection for this pass entirely.
         /// </summary>

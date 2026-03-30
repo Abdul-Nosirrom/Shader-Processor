@@ -7,13 +7,14 @@ A Unity URP shader preprocessing system that automatically generates auxiliary p
 - **Automatic Pass Generation**: Write your Forward pass once, get ShadowCaster, DepthOnly, DepthNormals, MotionVectors, and Meta passes generated automatically
 - **Forward Body Injection**: Inject your entire vertex and fragment body into generated passes with no hooks needed. The system strips boilerplate, normalizes variable names, rewrites struct types, and swaps return statements per pass. Great for shaders where you just want everything to "work" without defining hooks
 - **Hook System**: Define vertex displacement, interpolator transfer, alpha clip, and tessellation factor override functions that propagate to all generated passes
+- **Shader Inheritance**: Child shaders inherit from a parent via `"Inherit" = "Parent/Name"`. Supports property overrides, pass exclusion, pass-level tag/render state overrides, HLSLINCLUDE appending, auto-generated CBUFFER/texture declarations for new properties, and InheritHook injection points for parent-defined extensibility
 - **Pass Injectors**: Data-driven pass definitions. Each pass is a small class + a template. Adding a new pass type requires zero pipeline changes
 - **Tag Processors**: Modular feature injection for things that modify existing passes (like tessellation). Supports Full and Pass scoping modes
 - **Hardware Tessellation**: Full tessellation pipeline with multiple modes, phong smoothing, and culling. Injected per-pass via tags
 - **Struct Preservation**: Works with any struct/function/variable naming. Your `Attributes`/`Interpolators` (or `VIn`/`VOut` or whatever you call them) are carried through correctly. Same goes for parameter names like `v`, `o`, `i` instead of `input`/`output`
 - **HLSLINCLUDE Support**: Structs, CBUFFER, textures, hook pragmas, and hook function bodies can all live in HLSLINCLUDE and are handled correctly across all passes
 - **Editor Tooling**: Inspector shows parsed shader info, active passes, active tag processors, and detected hooks. Docs window (Tools/ShaderProcessor/Docs) shows all registered hooks, passes, and processors
-- **Automated Tests**: 79 EditMode tests covering pass generation, hooks, tessellation, outlines, CBUFFER handling, forward body injection, variable name normalization, and regression cases. Run via Window > General > Test Runner
+- **Automated Tests**: EditMode tests covering pass generation, hooks, tessellation, outlines, CBUFFER handling, forward body injection, variable name normalization, shader inheritance, and regression cases. Run via Window > General > Test Runner
 
 ## Installation
 
@@ -325,16 +326,172 @@ public class MyFeatureProcessor : ShaderTagProcessorBase
 }
 ```
 
+## Shader Inheritance
+
+Inheritance lets you create child shaders that reuse a parent's code without duplication. The child declares `"Inherit" = "Parent/ShaderName"` in its SubShader tags and can override or extend anything about the parent.
+
+### Basic Usage
+
+The simplest child just inherits everything and adds a tag:
+
+```hlsl
+Shader "MyShader/Tessellated"
+{
+    SubShader
+    {
+        Tags
+        {
+            "Inherit" = "MyShader/Base"
+            "Tessellation" = "On"
+        }
+    }
+}
+```
+
+That's a complete shader. It inherits all Properties, HLSLINCLUDE, passes, and pass injection markers from the parent, then adds the Tessellation tag on top.
+
+### Property Overrides
+
+Child can redeclare properties to change defaults, ranges, or attributes. Matching is by `_PropertyName`. Properties that don't exist in the parent are appended.
+
+```hlsl
+Properties
+{
+    // Override parent's default and range
+    _AlphaCutoff("Alpha Cutoff", Range(0.1, 0.9)) = 0.3
+    // Add a new property
+    _RimPower("Rim Power", Range(0, 10)) = 3.0
+}
+```
+
+### Pass Exclusion
+
+Remove parent passes you don't need via the `ExcludePasses` tag. Comma-separated, matched by pass Name.
+
+```hlsl
+Tags
+{
+    "Inherit" = "MyShader/Base"
+    "ExcludePasses" = "Meta,ExtraPass"
+}
+```
+
+### Pass Overrides
+
+Child Pass blocks without an HLSLPROGRAM are treated as metadata-only overrides. They match the parent pass by Name and merge tags and render state (Cull, ZWrite, ZTest, Blend, ColorMask, Offset).
+
+```hlsl
+// Override the parent's Forward pass LightMode and culling
+Pass
+{
+    Name "Forward"
+    Tags { "LightMode" = "VFXForward" }
+    Cull Off
+}
+```
+
+If the child Pass block contains an HLSLPROGRAM, it's treated as a full pass (not an override) and gets added as-is.
+
+### HLSLINCLUDE Append
+
+Child can add code to the parent's HLSLINCLUDE block. Content is appended before the parent's ENDHLSL. Hook functions, utility functions, and additional includes all go here.
+
+```hlsl
+HLSLINCLUDE
+// This gets appended to the parent's HLSLINCLUDE
+
+void MyHelper() { /* ... */ }
+ENDHLSL
+```
+
+### Property Declarations
+
+When a child adds new properties (ones that don't exist in the parent), the system automatically generates the matching HLSL declarations. Scalar types (Float, Range, Int, Color, Vector) get a CBUFFER entry inserted before the parent's `CBUFFER_END`. Texture types (2D, 3D, Cube) get `TEXTURE2D`/`SAMPLER` declarations outside the CBUFFER, plus a `float4 _Name_ST` entry inside it for 2D textures.
+
+This means you just declare the property in the child's Properties block and use it in hook functions. No manual CBUFFER management needed.
+
+```hlsl
+// Child shader
+Properties
+{
+    _RimPower("Rim Power", Range(0, 10)) = 3.0    // auto-generates: float _RimPower;
+    _RimColor("Rim Color", Color) = (1,1,1,1)     // auto-generates: float4 _RimColor;
+    _RimTex("Rim Texture", 2D) = "white" {}       // auto-generates: TEXTURE2D + SAMPLER + _ST
+}
+```
+
+Properties that override existing parent properties (matched by `_Name`) don't generate duplicate declarations since the parent's CBUFFER already has them.
+
+### InheritHook Injection Points
+
+Parents can define named injection points in their shader code. Children bind functions to those points via pragmas. This is the most powerful inheritance feature since it lets the parent define exactly where and how children can extend behavior.
+
+**Parent shader:**
+```hlsl
+half4 Frag(Interpolators input) : SV_Target
+{
+    half4 col = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _BaseColor;
+    {{InheritHook:ModifyColor(inout half4 col, float3 normalWS)}}
+    return col;
+}
+```
+
+The marker `{{InheritHook:Name(signature)}}` declares a hook point. The signature lists the available parameters with their types and qualifiers (`inout` for writable parameters). When the parent compiles standalone, the marker is stripped (resolves to nothing).
+
+**Child shader:**
+```hlsl
+HLSLINCLUDE
+#pragma InheritHook ModifyColor ApplyRim
+
+void ApplyRim(inout half4 col, float3 normalWS)
+{
+    float rim = 1.0 - saturate(dot(normalWS, float3(0, 0, 1)));
+    col.rgb += pow(rim, _RimPower) * 0.5;
+}
+ENDHLSL
+```
+
+The `#pragma InheritHook HookName FunctionName` binds a function to the hook. During inheritance resolution, the marker is replaced with `ApplyRim(col, normalWS);` using the argument names extracted from the signature. The function definition is appended to the parent's HLSLINCLUDE so it's visible at the call site.
+
+Multiple hooks can be defined in the same parent, and a child can bind to any subset of them. Unbound hooks just resolve to nothing.
+
+### How It Works
+
+Inheritance is a pre-processing step that runs before the main ShaderGen pipeline. The `ShaderInheritance.Resolve()` method:
+
+1. Loads the parent source
+2. Replaces the shader name
+3. Finds new child properties (not in parent)
+4. Merges child properties (override or append)
+5. Injects HLSL declarations for new properties (CBUFFER + textures)
+6. Merges SubShader tags
+7. Removes excluded passes
+8. Applies pass-level overrides (tags, render state)
+9. Appends child HLSLINCLUDE (hook functions, includes)
+10. Resolves InheritHook markers
+11. Appends pass injection markers
+12. Rewrites relative `#include` paths
+
+The result is a complete shader source that the rest of the pipeline processes as if it were hand-authored. The importer registers a dependency on the parent, so the child reimports when the parent changes.
+
+### Limitations
+
+- Single-level only. The parent cannot itself use Inherit.
+- Pass overrides match by Name only. Unnamed passes can't be overridden.
+- Property overrides replace a single line. If the parent's property has multi-line attribute chains above it, those are preserved (the declaration line itself is replaced).
+
 ## Processing Pipeline
 
 ```
-1. ShaderParser.Parse()                                -- Extract structs, CBUFFER, textures, hooks, passes
-2. ShaderPassInjectorRegistry.CollectMaterialEntries() -- Gather material data from active pass injectors
+0. ShaderInheritance.Resolve()                          -- Pre-pass: merge parent + child if Inherit tag present
+1. ShaderParser.Parse()                                 -- Extract structs, CBUFFER, textures, hooks, passes
+2. ShaderPassInjectorRegistry.CollectMaterialEntries()  -- Gather material data from active pass injectors
 3. ShaderTagProcessorRegistry.CollectTagProcessorEntries() -- Discover processors, collect material data
 4. InjectProcessorProperties() + InjectProcessorCBuffer() -- Inject ALL accumulated material data into source
-5. ReparseAllPasses() + ModifyTaggedPasses()           -- Reparse, then run ModifyPass (e.g., tessellation)
-6. ProcessPassMarkers()                                -- Generate and insert passes from [Inject] markers
-7. Validate()                                          -- Check for missing structs/semantics
+5. ReparseAllPasses() + ModifyTaggedPasses()            -- Reparse, then run ModifyPass (e.g., tessellation)
+6. ProcessPassMarkers()                                 -- Generate and insert passes from [Inject] markers
+7. StripInheritHookMarkers()                            -- Remove any remaining {{InheritHook:...}} markers
+8. Validate()                                           -- Check for missing structs/semantics
 ```
 
 Stages 2 and 3 both collect into the same fields (`ProcessorPropertiesEntries`, `ProcessorCBufferEntries`). Stage 4 injects everything in one shot, so pass injector and tag processor material data are treated uniformly.
@@ -429,6 +586,7 @@ Editor/
 │   ├── ShaderContext.cs           # Shared state during processing
 │   ├── ShaderParser.cs            # Parses shader source
 │   ├── ShaderProcessor.cs         # Main processing pipeline
+│   ├── ShaderInheritance.cs       # Inheritance pre-pass (Inherit tag resolution)
 │   └── FSShaderImporter.cs        # ScriptedImporter + inspector
 ├── Generation/
 │   ├── TemplateEngine.cs          # Template loading and marker replacement
@@ -459,7 +617,7 @@ Editor/
 Tests/
 ├── FS.ShaderProcessor.Tests.asmdef
 ├── ShaderProcessorTests.cs
-├── Test01 through Test18 shader files
+├── Test01 through Test19 shader files
 ```
 
 ## Notes

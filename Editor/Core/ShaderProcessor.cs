@@ -61,9 +61,24 @@ namespace FS.Shaders.Editor
             ShaderTagProcessorRegistry.ModifyTaggedPasses(ctx);
             
             // Stage 6: Generate passes
-            ProcessPassMarkers(ctx);
+            // Skip if no reference pass was found - generated passes would be invalid
+            // without struct, hook, and content data from a reference pass.
+            if (ctx.ReferencePass != null)
+            {
+                ProcessPassMarkers(ctx);
+            }
+            else
+            {
+                Debug.LogWarning($"[ShaderProcessor] No reference pass found in {ctx.ShaderPath}. Pass generation skipped.");
+            }
             
-            // Stage 7: Validation
+            // Stage 7: Strip remaining InheritHook markers
+            // Parent shaders declare {{InheritHook:Name(...)}} points that child shaders
+            // fill via inheritance. When the parent compiles standalone (no child), these
+            // markers need to be removed so they don't break HLSL compilation.
+            StripInheritHookMarkers(ctx);
+            
+            // Stage 8: Validation
             ValidateProcessedShader(ctx);
             
             return ctx.ProcessedSource;
@@ -117,27 +132,34 @@ namespace FS.Shaders.Editor
             }
         }
         
+        /// <summary>
+        /// Check if a position in source code is inside a comment.
+        /// Delegates to <see cref="ShaderBlockUtility.IsInComment"/> which
+        /// handles both line comments (//) and block comments (/* */),
+        /// including // inside closed block comments on the same line.
+        /// </summary>
         public static bool IsInComment(string source, int position)
         {
-            int lineStart = source.LastIndexOf('\n', position);
-            if (lineStart < 0) lineStart = 0;
-            
-            string lineBeforePosition = source.Substring(lineStart, position - lineStart);
-            
-            // Check for // comment
-            if (lineBeforePosition.Contains("//"))
-                return true;
-            
-            // Check for /* */ block comment (simplified check)
-            int blockCommentStart = source.LastIndexOf("/*", position);
-            if (blockCommentStart >= 0)
-            {
-                int blockCommentEnd = source.IndexOf("*/", blockCommentStart);
-                if (blockCommentEnd < 0 || blockCommentEnd > position)
-                    return true;
-            }
-            
-            return false;
+            return ShaderBlockUtility.IsInComment(source, position);
+        }
+        
+        //=============================================================================
+        // InheritHook Cleanup
+        //=============================================================================
+        
+        static readonly Regex s_inheritHookMarkerRegex = new Regex(
+            @"\{\{InheritHook:\w+\([^)]*\)\}\}", RegexOptions.Compiled);
+        
+        /// <summary>
+        /// Strip any remaining InheritHook markers from the processed source.
+        /// These markers are placed by parent shaders as extension points for children.
+        /// When the parent is compiled standalone, they must be removed.
+        /// When a child inherits, the markers are already resolved by
+        /// <see cref="ShaderInheritance.ResolveInheritHooks"/> before this runs.
+        /// </summary>
+        void StripInheritHookMarkers(ShaderContext ctx)
+        {
+            ctx.ProcessedSource = s_inheritHookMarkerRegex.Replace(ctx.ProcessedSource, "");
         }
         
         //=============================================================================

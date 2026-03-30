@@ -34,7 +34,7 @@ namespace FS.Shaders.Editor
                     ctx.AttributesStructName, attrName, ctx.InterpolatorsStructName, interpName);
                 
                 // Prefix function name to avoid collision with HLSLINCLUDE version.
-                // HLSLINCLUDE functions are visible in all passes — if we emit a version with
+                // HLSLINCLUDE functions are visible in all passes - if we emit a version with
                 // rewritten struct types but the same name, HLSL can't resolve the overload
                 // because structurally identical structs are treated as interchangeable.
                 if (!string.IsNullOrEmpty(passName))
@@ -127,10 +127,10 @@ namespace FS.Shaders.Editor
         {
             var result = new ForwardContentResult { Preprocessor = "", Content = "" };
             
-            if (ctx.ForwardPass == null || string.IsNullOrEmpty(ctx.ForwardPass.HlslProgram))
+            if (ctx.ReferencePass == null || string.IsNullOrEmpty(ctx.ReferencePass.HlslProgram))
                 return result;
 
-            string hlsl = ctx.ForwardPass.HlslProgram;
+            string hlsl = ctx.ReferencePass.HlslProgram;
 
             // =====================================================================
             // CRITICAL: Strip CBUFFER, textures BEFORE function removal.
@@ -141,13 +141,10 @@ namespace FS.Shaders.Editor
             // =====================================================================
             
             // Remove CBUFFER (handled by {{CBUFFER}} in template)
-            hlsl = Regex.Replace(hlsl, @"CBUFFER_START\s*\(\s*UnityPerMaterial\s*\).*?CBUFFER_END", "", RegexOptions.Singleline);
+            hlsl = ShaderBlockUtility.StripCBuffer(hlsl);
 
             // Remove texture/sampler declarations (handled by {{TEXTURES}} in template)
-            hlsl = Regex.Replace(hlsl, @"TEXTURE2D\s*\(\s*\w+\s*\)\s*;", "");
-            hlsl = Regex.Replace(hlsl, @"SAMPLER\s*\(\s*\w+\s*\)\s*;", "");
-            hlsl = Regex.Replace(hlsl, @"TEXTURE2D_ARRAY\s*\(\s*\w+\s*\)\s*;", "");
-            hlsl = Regex.Replace(hlsl, @"TEXTURECUBE\s*\(\s*\w+\s*\)\s*;", "");
+            hlsl = ShaderBlockUtility.StripTextureDeclarations(hlsl);
 
             // Remove pragmas we'll replace
             hlsl = RemovePragmas(hlsl, "vertex", "fragment");
@@ -157,8 +154,8 @@ namespace FS.Shaders.Editor
             hlsl = RemoveStructDeclaration(hlsl, ctx.InterpolatorsStructName);
 
             // Remove vertex and fragment functions
-            hlsl = RemoveFunction(hlsl, ctx.ForwardVertexFunctionName);
-            hlsl = RemoveFunction(hlsl, ctx.ForwardFragmentFunctionName);
+            hlsl = RemoveFunction(hlsl, ctx.ReferenceVertexFunctionName);
+            hlsl = RemoveFunction(hlsl, ctx.ReferenceFragmentFunctionName);
 
             // Remove hook functions (they're output separately via HOOK_FUNCTIONS)
             foreach (var entry in ctx.Hooks.Active)
@@ -169,18 +166,18 @@ namespace FS.Shaders.Editor
             // Remove hook pragma declarations for all registered hooks
             foreach (var hook in ShaderHookRegistry.All)
             {
-                hlsl = Regex.Replace(hlsl, $@"#pragma\s+{Regex.Escape(hook.PragmaName)}\s+\w+\s*\n?", "");
+                hlsl = ShaderPragmaUtility.Strip(hlsl, hook.PragmaName);
             }
 
             // Remove fragmentOutput pragmas (used by ForwardBodyInjector, not valid HLSL)
-            hlsl = Regex.Replace(hlsl, @"#pragma\s+fragmentOutput:\w+\s+\w+\s*\n?", "");
+            hlsl = ShaderPragmaUtility.StripFragmentOutputs(hlsl);
 
             // Rewrite struct names (for any remaining references in helper code)
             hlsl = RewriteStructNames(hlsl, ctx.AttributesStructName, targetAttrName,
                 ctx.InterpolatorsStructName, targetInterpName);
             
             // Remove stray # or #pragma on their own lines
-            hlsl = Regex.Replace(hlsl, @"^\s*#\s*(pragma)?\s*$", "", RegexOptions.Multiline);
+            hlsl = ShaderPragmaUtility.StripOrphanedPragmaLines(hlsl);
 
             // =====================================================================
             // Split into preprocessor directives and code.
@@ -211,8 +208,8 @@ namespace FS.Shaders.Editor
             }
             
             // Clean up multiple blank lines in both outputs
-            string preprocessor = Regex.Replace(preprocessorLines.ToString(), @"\n{3,}", "\n\n").Trim();
-            string content = Regex.Replace(codeLines.ToString(), @"\n{3,}", "\n\n").Trim();
+            string preprocessor = ShaderSourceUtility.CollapseBlankLines(preprocessorLines.ToString()).Trim();
+            string content = ShaderSourceUtility.CollapseBlankLines(codeLines.ToString()).Trim();
             
             result.Preprocessor = preprocessor;
             result.Content = content;
@@ -254,7 +251,7 @@ namespace FS.Shaders.Editor
             // Legacy behavior: return everything combined (preprocessor + content)
             // This preserves behavior for any external code calling this method.
             string combined = split.Preprocessor + "\n" + split.Content;
-            return Regex.Replace(combined, @"\n{3,}", "\n\n").Trim();
+            return ShaderSourceUtility.CollapseBlankLines(combined).Trim();
         }
         
         //=============================================================================
@@ -263,98 +260,17 @@ namespace FS.Shaders.Editor
         
         static string RemovePragmas(string code, params string[] pragmaTypes)
         {
-            foreach (var pragmaType in pragmaTypes)
-            {
-                code = Regex.Replace(code, $@"#pragma\s+{pragmaType}\s+\w+\s*\n?", "");
-            }
-            return code;
+            return ShaderPragmaUtility.StripAll(code, pragmaTypes);
         }
         
         static string RemoveStructDeclaration(string code, string structName)
         {
-            if (string.IsNullOrEmpty(structName)) return code;
-            
-            // Match: struct Name { ... };
-            var match = Regex.Match(code, $@"struct\s+{Regex.Escape(structName)}\s*\{{");
-            if (!match.Success) return code;
-            
-            int startIndex = match.Index;
-            int braceCount = 0;
-            int endIndex = startIndex;
-            bool foundBrace = false;
-            
-            for (int i = startIndex; i < code.Length; i++)
-            {
-                if (code[i] == '{')
-                {
-                    braceCount++;
-                    foundBrace = true;
-                }
-                else if (code[i] == '}')
-                {
-                    braceCount--;
-                    if (foundBrace && braceCount == 0)
-                    {
-                        endIndex = i + 1;
-                        // Include trailing semicolon if present
-                        if (endIndex < code.Length && code[endIndex] == ';')
-                            endIndex++;
-                        break;
-                    }
-                }
-            }
-            
-            if (endIndex > startIndex)
-            {
-                code = code.Remove(startIndex, endIndex - startIndex);
-            }
-            
-            return code;
+            return ShaderFunctionUtility.RemoveStructDeclaration(code, structName);
         }
         
         static string RemoveFunction(string hlsl, string functionName)
         {
-            if (string.IsNullOrEmpty(functionName))
-                return hlsl;
-    
-            // Pattern: [modifier] return_type FunctionName(params) [: semantic] { body }
-            // Must handle nested braces.
-            // IMPORTANT: The optional modifier group uses [ \t]+ (not \s+) to prevent
-            // matching words from unrelated lines. Without this, a word like CBUFFER_END
-            // on a distant line could be grabbed as a "modifier", eating it from the source.
-            var pattern = $@"
-                (\w+[ \t]+)?                        # Optional modifier (inline, etc.) - same line only
-                \w+\s+                              # Return type
-                {Regex.Escape(functionName)}\s*     # Function name
-                \([^)]*\)\s*                        # Parameters
-                (:\s*\w+\s*)?                       # Optional semantic (: SV_Target)
-                \{{                                 # Opening brace
-            ";
-    
-            var match = Regex.Match(hlsl, pattern, RegexOptions.IgnorePatternWhitespace | RegexOptions.Singleline);
-    
-            if (!match.Success)
-                return hlsl;
-    
-            // Find matching closing brace
-            int braceStart = match.Index + match.Length - 1;
-            int depth = 1;
-            int i = braceStart + 1;
-    
-            while (i < hlsl.Length && depth > 0)
-            {
-                if (hlsl[i] == '{') depth++;
-                else if (hlsl[i] == '}') depth--;
-                i++;
-            }
-    
-            if (depth == 0)
-            {
-                // Remove from match start to closing brace
-                return hlsl.Substring(0, match.Index) + hlsl.Substring(i);
-            }
-    
-            return hlsl;
+            return ShaderFunctionUtility.RemoveFunction(hlsl, functionName);
         }
     }
 }

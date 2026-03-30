@@ -64,8 +64,8 @@ namespace FS.Shaders.Editor
         /// </summary>
         static string BuildVertexBody(ShaderContext ctx, string passName)
         {
-            string source = ctx.ForwardPass?.HlslProgram;
-            string funcName = ctx.ForwardVertexFunctionName;
+            string source = ctx.ReferencePass?.HlslProgram;
+            string funcName = ctx.ReferenceVertexFunctionName;
             
             // Detect user's variable names before extraction
             string userInputName = DetectParameterName(source, funcName) ?? "input";
@@ -123,7 +123,7 @@ namespace FS.Shaders.Editor
                 "");
             
             // Strip: hook calls in function body (prevents double-execution when
-            // hooks and body injection coexist — templates emit hook calls separately)
+            // hooks and body injection coexist - templates emit hook calls separately)
             foreach (var entry in ctx.Hooks.Active)
             {
                 body = Regex.Replace(body,
@@ -158,8 +158,8 @@ namespace FS.Shaders.Editor
             string expression = ResolveReturnExpression(injector, ctx, outputMap);
             if (expression == null) return null;
             
-            string source = ctx.ForwardPass?.HlslProgram;
-            string funcName = ctx.ForwardFragmentFunctionName;
+            string source = ctx.ReferencePass?.HlslProgram;
+            string funcName = ctx.ReferenceFragmentFunctionName;
             
             // Detect user's parameter name before extraction
             string userInputName = DetectParameterName(source, funcName) ?? "input";
@@ -225,17 +225,19 @@ namespace FS.Shaders.Editor
         //=============================================================================
         
         /// <summary>
-        /// Detect the parameter name of a function from its signature.
+        /// Detect the first parameter name of a function from its signature.
         /// For "Interpolators Vert(Attributes v)" returns "v".
         /// </summary>
         public static string DetectParameterName(string source, string funcName)
         {
             if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(funcName))
                 return null;
-            
-            var match = Regex.Match(source,
-                $@"\w+\s+{Regex.Escape(funcName)}\s*\(\s*\w+\s+(\w+)");
-            return match.Success ? match.Groups[1].Value : null;
+
+            var info = ShaderFunctionUtility.FindFunction(source, funcName);
+            if (info == null) return null;
+
+            var parameters = ShaderFunctionUtility.ParseParameters(info.Value.ParameterList);
+            return parameters.Count > 0 ? parameters[0].Name : null;
         }
         
         /// <summary>
@@ -367,18 +369,11 @@ namespace FS.Shaders.Editor
         /// </summary>
         static Dictionary<string, string> ParseFragmentOutputPragmas(ShaderContext ctx)
         {
-            var map = new Dictionary<string, string>();
-            if (ctx.ForwardPass == null) return map;
-            
-            string source = (ctx.HlslIncludeBlock ?? "") + "\n" + (ctx.ForwardPass.HlslProgram ?? "");
-            
-            var matches = Regex.Matches(source, @"#pragma\s+fragmentOutput:(\w+)\s+(\w+)");
-            foreach (Match match in matches)
-            {
-                map[match.Groups[1].Value] = match.Groups[2].Value;
-            }
-            
-            return map;
+            if (ctx.ReferencePass == null)
+                return new Dictionary<string, string>();
+
+            string source = (ctx.HlslIncludeBlock ?? "") + "\n" + (ctx.ReferencePass.HlslProgram ?? "");
+            return ShaderPragmaUtility.ParseFragmentOutputs(source);
         }
         
         //=============================================================================
@@ -387,31 +382,12 @@ namespace FS.Shaders.Editor
         
         /// <summary>
         /// Extract the inner body of a function (between the outermost braces).
+        /// When multiple definitions exist behind #if guards, returns the longest
+        /// (the real implementation, not the stub).
         /// </summary>
         static string ExtractFunctionBody(string source, string funcName)
         {
-            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(funcName))
-                return null;
-            
-            // Match: returnType FuncName(params) [: semantic] {
-            var pattern = $@"\w+\s+{Regex.Escape(funcName)}\s*\([^)]*\)\s*(:\s*\w+\s*)?\{{";
-            var match = Regex.Match(source, pattern, RegexOptions.Singleline);
-            if (!match.Success) return null;
-            
-            int braceStart = match.Index + match.Length - 1;
-            int depth = 1;
-            int i = braceStart + 1;
-            
-            while (i < source.Length && depth > 0)
-            {
-                if (source[i] == '{') depth++;
-                else if (source[i] == '}') depth--;
-                i++;
-            }
-            
-            if (depth != 0) return null;
-            
-            return source.Substring(braceStart + 1, i - braceStart - 2).Trim();
+            return ShaderFunctionUtility.FindLongestFunction(source, funcName)?.Body;
         }
         
         /// <summary>
@@ -420,7 +396,7 @@ namespace FS.Shaders.Editor
         /// </summary>
         public static string ExtractForwardVertexBody(ShaderContext ctx)
         {
-            return ExtractFunctionBody(ctx.ForwardPass?.HlslProgram, ctx.ForwardVertexFunctionName);
+            return ExtractFunctionBody(ctx.ReferencePass?.HlslProgram, ctx.ReferenceVertexFunctionName);
         }
     }
 }

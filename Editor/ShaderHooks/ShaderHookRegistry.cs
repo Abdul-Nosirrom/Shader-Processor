@@ -20,6 +20,10 @@ namespace FS.Shaders.Editor
         // Initialization
         //=============================================================================
         
+        /// <summary>
+        /// Discover and register all hook definitions via TypeCache.
+        /// Safe to call multiple times - subsequent calls are no-ops.
+        /// </summary>
         public static void Initialize()
         {
             if (s_Initialized) return;
@@ -79,6 +83,9 @@ namespace FS.Shaders.Editor
         // Reload
         //=============================================================================
         
+        /// <summary>
+        /// Force re-discovery of all hook definitions. Clears existing state first.
+        /// </summary>
         public static void Reinitialize()
         {
             s_Initialized = false;

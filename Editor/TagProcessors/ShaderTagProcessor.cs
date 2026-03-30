@@ -163,7 +163,7 @@ namespace FS.Shaders.Editor
         /// Discover enabled tag processors and collect their material data.
         /// Appends to ctx.ProcessorPropertiesEntries and ctx.ProcessorCBufferEntries
         /// (alongside any entries already collected from pass injectors).
-        /// Does NOT inject into source or modify passes — that happens in the main pipeline.
+        /// Does NOT inject into source or modify passes - that happens in the main pipeline.
         /// </summary>
         public static void CollectTagProcessorEntries(ShaderContext ctx)
         {
@@ -174,7 +174,7 @@ namespace FS.Shaders.Editor
             {
                 if (ctx.SubShaderTags.TryGetValue(processor.TagName, out string tagValue))
                 {
-                    string mode = ParseTagMode(tagValue);
+                    string mode = ShaderTagUtility.ParseTagMode(tagValue);
                     if (mode != null)
                     {
                         ctx.EnableFeature(processor.TagName, mode);
@@ -245,11 +245,12 @@ namespace FS.Shaders.Editor
             
             string content = match.Groups[2].Value;
             string newContent = content.TrimEnd() + "\n" + ctx.ProcessorPropertiesEntries + "\n    ";
+            string replacement = match.Groups[1].Value + newContent + match.Groups[3].Value;
             
-            ctx.ProcessedSource = ctx.ProcessedSource.Replace(
-                match.Value,
-                match.Groups[1].Value + newContent + match.Groups[3].Value
-            );
+            // Index-based replacement to avoid hitting duplicate matches elsewhere in the source
+            ctx.ProcessedSource = ctx.ProcessedSource.Substring(0, match.Index)
+                + replacement
+                + ctx.ProcessedSource.Substring(match.Index + match.Length);
         }
         
         /// <summary>
@@ -261,23 +262,17 @@ namespace FS.Shaders.Editor
         {
             if (string.IsNullOrEmpty(ctx.ProcessorCBufferEntries)) return;
             
-            var match = System.Text.RegularExpressions.Regex.Match(ctx.ProcessedSource,
-                @"(CBUFFER_START\s*\(\s*UnityPerMaterial\s*\))(.*?)(CBUFFER_END)",
-                System.Text.RegularExpressions.RegexOptions.Singleline);
+            string result = ShaderBlockUtility.InsertBeforeCBufferEnd(
+                ctx.ProcessedSource,
+                ctx.ProcessorCBufferEntries.TrimEnd() + "\n            ");
             
-            if (!match.Success)
+            if (result == null)
             {
                 Debug.LogWarning("[ShaderProcessor] Could not find CBUFFER for injection");
                 return;
             }
             
-            string content = match.Groups[2].Value;
-            string newContent = content.TrimEnd() + "\n" + ctx.ProcessorCBufferEntries + "\n            ";
-            
-            ctx.ProcessedSource = ctx.ProcessedSource.Replace(
-                match.Value,
-                match.Groups[1].Value + newContent + match.Groups[3].Value
-            );
+            ctx.ProcessedSource = result;
         }
         
         /// <summary>
@@ -294,7 +289,7 @@ namespace FS.Shaders.Editor
             {
                 if (ctx.SubShaderTags.TryGetValue(processor.TagName, out string tagValue))
                 {
-                    string mode = ParseTagMode(tagValue);
+                    string mode = ShaderTagUtility.ParseTagMode(tagValue);
                     if (mode != null)
                         subShaderEnabledProcessors.Add(processor);
                 }
@@ -367,9 +362,6 @@ namespace FS.Shaders.Editor
         }
         
         /// <summary>
-        /// Get all processors that are enabled for this shader.
-        /// </summary>
-        /// <summary>
         /// Get processors that should contribute to generated passes.
         /// Filters out "Pass" mode processors since generated passes should only
         /// receive replacements from "Full" mode features.
@@ -384,20 +376,6 @@ namespace FS.Shaders.Editor
                 if (mode == "Full")
                     yield return processor;
             }
-        }
-        
-        /// <summary>
-        /// Parse a tag value into a mode string.
-        /// Returns "Full" for on/true/enabled/1/yes/full, "Pass" for pass, null for anything else.
-        /// </summary>
-        static string ParseTagMode(string value)
-        {
-            if (string.IsNullOrEmpty(value)) return null;
-            value = value.Trim().ToLowerInvariant();
-            if (value == "pass") return "Pass";
-            if (value == "on" || value == "true" || value == "enabled" || value == "1" || value == "yes" || value == "full")
-                return "Full";
-            return null;
         }
         
         //=============================================================================

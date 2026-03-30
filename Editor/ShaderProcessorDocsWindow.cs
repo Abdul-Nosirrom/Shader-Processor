@@ -175,7 +175,7 @@ namespace FS.Shaders.Editor
                 "1. Create a class inheriting ShaderHookDefinition with [ShaderHook] attribute\n" +
                 "2. Override PragmaName, Define, CallPattern, and TemplateMarker\n" +
                 "3. Place {{MARKER}} in your template at the desired call site\n" +
-                "4. The hook is automatically discovered — no pipeline code changes needed",
+                "4. The hook is automatically discovered - no pipeline code changes needed",
                 _descriptionStyle);
             EditorGUILayout.EndVertical();
         }

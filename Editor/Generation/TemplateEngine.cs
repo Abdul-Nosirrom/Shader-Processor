@@ -32,24 +32,18 @@ namespace FS.Shaders.Editor
         static string FindTemplatesPath()
         {
             var guids = AssetDatabase.FindAssets("t:Script TemplateEngine");
-            Debug.Log($"Are we looking for template paths at all?: {guids.Length}");
             
             foreach (var guid in guids)
             {
                 string scriptPath = AssetDatabase.GUIDToAssetPath(guid);
-                //if (!scriptPath.Contains("FS.Shaders") && !scriptPath.Contains("ShaderProcessing"))
-                //    continue;
-                    
                 string dir = Path.GetDirectoryName(scriptPath);
                 
                 string templatesPath = Path.Combine(dir, "Templates");
-                Debug.Log($"Checking Validity Of Path: {templatesPath} Is Valid? {AssetDatabase.IsValidFolder(templatesPath)}");
                 if (AssetDatabase.IsValidFolder(templatesPath))
                     return templatesPath;
                 
                 string parentDir = Path.GetDirectoryName(dir);
                 templatesPath = Path.Combine(parentDir, "Templates");
-                Debug.Log($"Checking Validity Of Path: {templatesPath} Is Valid? {AssetDatabase.IsValidFolder(templatesPath)}");
                 if (AssetDatabase.IsValidFolder(templatesPath))
                     return templatesPath;
             }
@@ -196,7 +190,7 @@ namespace FS.Shaders.Editor
             // Hook feature defines
             replacements["HOOK_DEFINES"] = GenerateHookDefines(ctx);
             
-            // Hook calls (with #ifdef guards) — one per registered hook
+            // Hook calls (with #ifdef guards) - one per registered hook
             foreach (var hook in ShaderHookRegistry.All)
             {
                 replacements[hook.TemplateMarker] = GenerateHookCall(ctx, hook, passName);
@@ -204,6 +198,9 @@ namespace FS.Shaders.Editor
             
             // Default vertex pragma (tag processors can override)
             replacements["VERTEX_PRAGMA"] = $"#pragma vertex {passName}Vertex";
+            
+            // Extra fragment parameters (SV_IsFrontFace, etc.) from reference pass
+            replacements["EXTRA_FRAG_PARAMS"] = ctx.ExtraFragmentParams ?? "";
             
             // Empty defaults for tag processor markers
             replacements["TESSELLATION_PRAGMAS"] = "";

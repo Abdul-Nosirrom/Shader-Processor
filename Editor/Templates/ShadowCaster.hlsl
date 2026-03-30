@@ -16,8 +16,6 @@ Pass
     {{VERTEX_PRAGMA}}
     #pragma fragment ShadowCasterFragment
     
-    #pragma multi_compile_instancing
-    #pragma multi_compile _ DOTS_INSTANCING_ON
     #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
     
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -98,7 +96,7 @@ Pass
     // -------------------------------------------------------------------------
     // Fragment
     // -------------------------------------------------------------------------
-    half4 ShadowCasterFragment(ShadowCasterInterpolators input) : SV_TARGET
+    half4 ShadowCasterFragment(ShadowCasterInterpolators input{{EXTRA_FRAG_PARAMS}}) : SV_TARGET
     {
         UNITY_SETUP_INSTANCE_ID(input);
         

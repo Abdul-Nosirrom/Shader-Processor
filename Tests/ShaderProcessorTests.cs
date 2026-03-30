@@ -43,6 +43,44 @@ namespace FS.Shaders.Editor.Tests
             return _processor.Process(source, path);
         }
         
+        /// <summary>
+        /// Run inheritance resolution on a child shader. Returns the merged source
+        /// before processing. Use this to test the inheritance pre-pass in isolation.
+        /// </summary>
+        string ResolveTestShader(string childFileName)
+        {
+            string testsDir = FindTestsDirectory();
+            Assert.IsNotNull(testsDir, "Could not find Tests directory");
+            
+            string childPath = Path.Combine(testsDir, childFileName);
+            Assert.IsTrue(File.Exists(childPath), $"Test shader not found: {childPath}");
+            
+            string childSource = File.ReadAllText(childPath);
+            var result = ShaderInheritance.Resolve(childSource, childPath);
+            Assert.IsNotNull(result.ParentPath, "Inheritance resolution failed - parent not found");
+            
+            return result.Source;
+        }
+        
+        /// <summary>
+        /// Run inheritance resolution then full processing on a child shader.
+        /// This is what the importer does: resolve first, then process.
+        /// </summary>
+        string ResolveAndProcessTestShader(string childFileName)
+        {
+            string testsDir = FindTestsDirectory();
+            Assert.IsNotNull(testsDir, "Could not find Tests directory");
+            
+            string childPath = Path.Combine(testsDir, childFileName);
+            Assert.IsTrue(File.Exists(childPath), $"Test shader not found: {childPath}");
+            
+            string childSource = File.ReadAllText(childPath);
+            var result = ShaderInheritance.Resolve(childSource, childPath);
+            Assert.IsNotNull(result.ParentPath, "Inheritance resolution failed - parent not found");
+            
+            return _processor.Process(result.Source, childPath);
+        }
+        
         static string FindTestsDirectory()
         {
             // Walk up from known script locations to find Tests/
@@ -1280,6 +1318,392 @@ namespace FS.Shaders.Editor.Tests
         }
         
         //=============================================================================
+        // Test 19: Shader Inheritance
+        //=============================================================================
+        
+        // --- Parent standalone ---
+        
+        [Test]
+        public void Test19_ParentCompilesStandalone()
+        {
+            // Parent has InheritHook markers that should be stripped
+            string output = ProcessTestShader("Test19_InheritParent.shader");
+            Assert.IsTrue(output.Contains("Name \"Forward\""), "Missing Forward pass");
+            Assert.IsTrue(output.Contains("Name \"ExtraPass\""), "Missing ExtraPass");
+        }
+        
+        [Test]
+        public void Test19_ParentInheritHookMarkersStripped()
+        {
+            string output = ProcessTestShader("Test19_InheritParent.shader");
+            Assert.IsFalse(output.Contains("{{InheritHook:"),
+                "InheritHook markers should be stripped when compiling parent standalone");
+        }
+        
+        // --- Minimal child (basic inheritance, no new features) ---
+        
+        [Test]
+        public void Test19_MinimalChild_InheritsShaderName()
+        {
+            string output = ResolveTestShader("Test19_InheritChild_Minimal.shader");
+            Assert.IsTrue(output.Contains("Shader \"Tests/19_InheritChild_Minimal\""),
+                "Child shader name should replace parent name");
+            Assert.IsFalse(output.Contains("Shader \"Tests/19_InheritParent\""),
+                "Parent shader name should not remain");
+        }
+        
+        [Test]
+        public void Test19_MinimalChild_TagsMerged()
+        {
+            string output = ResolveTestShader("Test19_InheritChild_Minimal.shader");
+            // Child adds Tessellation, parent has RenderType and RenderPipeline
+            Assert.IsTrue(output.Contains("\"Tessellation\" = \"On\""),
+                "Child tag 'Tessellation' should be merged");
+            Assert.IsTrue(output.Contains("\"RenderType\" = \"Opaque\""),
+                "Parent tag 'RenderType' should be preserved");
+        }
+        
+        [Test]
+        public void Test19_MinimalChild_InheritTagRemoved()
+        {
+            string output = ResolveTestShader("Test19_InheritChild_Minimal.shader");
+            Assert.IsFalse(output.Contains("\"Inherit\""),
+                "Inherit tag should not appear in resolved output");
+        }
+        
+        [Test]
+        public void Test19_MinimalChild_ParentPassesPresent()
+        {
+            string output = ResolveTestShader("Test19_InheritChild_Minimal.shader");
+            Assert.IsTrue(output.Contains("Name \"Forward\""), "Missing inherited Forward pass");
+            Assert.IsTrue(output.Contains("Name \"ExtraPass\""), "Missing inherited ExtraPass");
+        }
+        
+        // --- Combined child (all features) ---
+        
+        [Test]
+        public void Test19_PropertyOverride_DefaultChanged()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // Child overrides _AlphaCutoff with Range(0.1, 0.9) = 0.3
+            Assert.IsTrue(output.Contains("Range(0.1, 0.9)"),
+                "Child should override _AlphaCutoff range");
+            Assert.IsTrue(output.Contains("= 0.3"),
+                "Child should override _AlphaCutoff default value");
+        }
+        
+        [Test]
+        public void Test19_PropertyAddition()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            Assert.IsTrue(output.Contains("_RimPower"),
+                "Child property _RimPower should be added to Properties block");
+        }
+        
+        [Test]
+        public void Test19_PropertyPreserved()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // Parent properties that child doesn't override should remain unchanged
+            Assert.IsTrue(output.Contains("_Smoothness"),
+                "Parent property _Smoothness should be preserved");
+            Assert.IsTrue(output.Contains("_BaseMap"),
+                "Parent property _BaseMap should be preserved");
+        }
+        
+        [Test]
+        public void Test19_PassExclusion()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            Assert.IsFalse(output.Contains("Name \"ExtraPass\""),
+                "ExtraPass should be excluded");
+            Assert.IsTrue(output.Contains("Name \"Forward\""),
+                "Forward pass should still be present");
+        }
+        
+        [Test]
+        public void Test19_PassOverride_LightMode()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // Child overrides Forward's LightMode to "VFXForward"
+            // Find the Forward pass and check its tags
+            int forwardIdx = output.IndexOf("Name \"Forward\"");
+            Assert.IsTrue(forwardIdx >= 0, "Forward pass should exist");
+            
+            // Look at the Tags block near the Forward pass
+            string afterForward = output.Substring(forwardIdx, 
+                System.Math.Min(500, output.Length - forwardIdx));
+            Assert.IsTrue(afterForward.Contains("\"VFXForward\""),
+                "Forward pass should have overridden LightMode");
+        }
+        
+        [Test]
+        public void Test19_PassOverride_RenderState()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // Child overrides Forward's Cull to Off
+            // The parent has Cull Back at SubShader level, child overrides at pass level
+            int forwardIdx = output.IndexOf("Name \"Forward\"");
+            Assert.IsTrue(forwardIdx >= 0, "Forward pass should exist");
+            
+            // Find the pass's Cull directive (should be "Cull Off" from override)
+            string passRegion = output.Substring(forwardIdx,
+                System.Math.Min(500, output.Length - forwardIdx));
+            Assert.IsTrue(passRegion.Contains("Cull Off"),
+                "Forward pass should have Cull Off from child override");
+        }
+        
+        [Test]
+        public void Test19_NewPropertyAutoDeclaresInCBuffer()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // _RimPower is a new child property (Range type), should auto-generate
+            // a float declaration inside the parent's CBUFFER
+            int cbufferEnd = output.IndexOf("CBUFFER_END");
+            Assert.IsTrue(cbufferEnd >= 0, "CBUFFER_END should exist");
+            
+            int rimPowerInCbuffer = output.IndexOf("float _RimPower");
+            Assert.IsTrue(rimPowerInCbuffer >= 0, "_RimPower should be auto-declared in CBUFFER");
+            Assert.IsTrue(rimPowerInCbuffer < cbufferEnd,
+                "_RimPower declaration should appear before CBUFFER_END");
+        }
+        
+        [Test]
+        public void Test19_HlslIncludeAppend()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // Child's hook function should be appended to parent's HLSLINCLUDE
+            Assert.IsTrue(output.Contains("void ApplyRim"),
+                "Child hook function should be in merged output");
+        }
+        
+        [Test]
+        public void Test19_IntellisenseStubStripped()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // Child may declare property variables in HLSLINCLUDE for IDE intellisense.
+            // These must be stripped since they're auto-generated in the CBUFFER.
+            // float _RimPower should appear once (in CBUFFER), not twice.
+            int count = 0;
+            int idx = 0;
+            while ((idx = output.IndexOf("float _RimPower", idx)) >= 0)
+            {
+                count++;
+                idx += "float _RimPower".Length;
+            }
+            Assert.AreEqual(1, count,
+                $"float _RimPower should appear once (auto-generated in CBUFFER), found {count}");
+        }
+        
+        [Test]
+        public void Test19_InheritHookResolved()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // The InheritHook marker should be replaced with a function call
+            Assert.IsTrue(output.Contains("ApplyRim(col, input.normalWS);"),
+                "InheritHook should resolve to function call with extracted args");
+            Assert.IsFalse(output.Contains("{{InheritHook:"),
+                "InheritHook markers should be fully resolved");
+        }
+        
+        [Test]
+        public void Test19_InheritHookPragmaStripped()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            Assert.IsFalse(output.Contains("#pragma InheritHook"),
+                "InheritHook pragma should be stripped from appended HLSLINCLUDE");
+        }
+        
+        [Test]
+        public void Test19_OverriddenPropertyNotDuplicatedInCBuffer()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            // _AlphaCutoff is an override (exists in parent), should NOT get a second
+            // declaration auto-generated. Parent already has float _AlphaCutoff.
+            int cbufferStart = output.IndexOf("CBUFFER_START");
+            int cbufferEnd = output.IndexOf("CBUFFER_END");
+            string cbufferBlock = output.Substring(cbufferStart, cbufferEnd - cbufferStart);
+            
+            int count = 0;
+            int idx = 0;
+            while ((idx = cbufferBlock.IndexOf("_AlphaCutoff", idx)) >= 0)
+            {
+                count++;
+                idx += "_AlphaCutoff".Length;
+            }
+            Assert.AreEqual(1, count,
+                $"_AlphaCutoff should appear once in CBUFFER (parent's), not duplicated. Found {count}");
+        }
+        
+        [Test]
+        public void Test19_SubShaderTagMerge()
+        {
+            string output = ResolveTestShader("Test19_InheritChild.shader");
+            Assert.IsTrue(output.Contains("\"Tessellation\" = \"On\""),
+                "Tessellation tag from child should be merged");
+            Assert.IsFalse(output.Contains("\"ExcludePasses\""),
+                "ExcludePasses is a directive, should not appear as a tag");
+        }
+        
+        //=============================================================================
+        // Test 20: Parsing Utilities
+        //=============================================================================
+        
+        [Test]
+        public void Test20_FindAllPassBlocks_SkipsCommentedPasses()
+        {
+            string source = @"
+SubShader
+{
+    Pass { Name ""Active"" }
+    // Pass { Name ""LineCommented"" }
+    /* Pass { Name ""BlockCommented"" } */
+    Pass { Name ""AlsoActive"" }
+}";
+            var blocks = ShaderBlockUtility.FindAllPassBlocks(source);
+            Assert.AreEqual(2, blocks.Count,
+                "Should find 2 uncommented passes");
+            Assert.IsTrue(blocks[0].Content.Contains("Active"),
+                "First pass should be 'Active'");
+            Assert.IsTrue(blocks[1].Content.Contains("AlsoActive"),
+                "Second pass should be 'AlsoActive'");
+        }
+        
+        [Test]
+        public void Test20_FindAllPassBlocks_HandlesBlockCommentBeforeBrace()
+        {
+            // This is the edge case the old simple Pass\s*\{ pattern would miss.
+            // The comment-aware pattern handles comments between "Pass" and "{".
+            string source = @"
+SubShader
+{
+    Pass /* some note */
+    {
+        Name ""Forward""
+        Tags { ""LightMode"" = ""UniversalForward"" }
+    }
+}";
+            var blocks = ShaderBlockUtility.FindAllPassBlocks(source);
+            Assert.AreEqual(1, blocks.Count,
+                "Should find the pass despite block comment before opening brace");
+            Assert.IsTrue(blocks[0].Content.Contains("Forward"),
+                "Pass content should contain the Name tag");
+        }
+        
+        [Test]
+        public void Test20_FindAllPassBlocks_HandlesLineCommentBeforeBrace()
+        {
+            string source = @"
+SubShader
+{
+    Pass // this is fine
+    {
+        Name ""DepthOnly""
+    }
+}";
+            var blocks = ShaderBlockUtility.FindAllPassBlocks(source);
+            Assert.AreEqual(1, blocks.Count,
+                "Should find the pass despite line comment before opening brace");
+            Assert.IsTrue(blocks[0].Content.Contains("DepthOnly"),
+                "Pass content should contain the Name tag");
+        }
+        
+        [Test]
+        public void Test20_ParseTagPairs_ExtractsKeyValuePairs()
+        {
+            string tags = @"""RenderPipeline"" = ""UniversalPipeline"" ""ShaderGen"" = ""True"" ""LightMode"" = ""UniversalForward""";
+            var result = ShaderBlockUtility.ParseTagPairs(tags);
+            
+            Assert.AreEqual(3, result.Count, "Should parse 3 tag pairs");
+            Assert.AreEqual("UniversalPipeline", result["RenderPipeline"]);
+            Assert.AreEqual("True", result["ShaderGen"]);
+            Assert.AreEqual("UniversalForward", result["LightMode"]);
+        }
+        
+        [Test]
+        public void Test20_ParseTagPairs_IsCaseInsensitive()
+        {
+            string tags = @"""LightMode"" = ""UniversalForward""";
+            var result = ShaderBlockUtility.ParseTagPairs(tags);
+            
+            Assert.AreEqual("UniversalForward", result["lightmode"],
+                "Tag lookup should be case-insensitive");
+        }
+        
+        [Test]
+        public void Test20_CollapseBlankLines_CollapsesEmptyLines()
+        {
+            string input = "line1\n\n\n\nline2\n\n\n\n\nline3";
+            string result = ShaderSourceUtility.CollapseBlankLines(input);
+            
+            Assert.IsFalse(result.Contains("\n\n\n"),
+                "Should not have 3+ consecutive newlines after collapse");
+            Assert.IsTrue(result.Contains("line1\n\nline2"),
+                "Should preserve single blank line between content");
+        }
+        
+        [Test]
+        public void Test20_CollapseBlankLines_CollapsesWhitespaceOnlyLines()
+        {
+            string input = "line1\n   \n   \nline2";
+            string result = ShaderSourceUtility.CollapseBlankLines(input);
+            
+            Assert.AreEqual("line1\n\nline2", result,
+                "Whitespace-only blank lines should collapse to a single blank line");
+        }
+        
+        [Test]
+        public void Test20_FindFunction_HandlesSemantic()
+        {
+            string source = @"
+half4 frag(Interpolators input) : SV_Target
+{
+    return half4(1, 0, 0, 1);
+}";
+            var info = ShaderFunctionUtility.FindFunction(source, "frag");
+            Assert.IsNotNull(info, "Should find function with output semantic");
+            Assert.AreEqual("SV_Target", info.Value.Semantic);
+            Assert.AreEqual("half4", info.Value.ReturnType);
+        }
+        
+        [Test]
+        public void Test20_FindFunction_HandlesNestedParens()
+        {
+            string source = @"
+void myFunc(float a, float b = max(0, 1))
+{
+    // body
+}";
+            var info = ShaderFunctionUtility.FindFunction(source, "myFunc");
+            Assert.IsNotNull(info, "Should find function with nested parens in default value");
+            
+            var parameters = ShaderFunctionUtility.ParseParameters(info.Value.ParameterList);
+            Assert.AreEqual(2, parameters.Count,
+                "Should parse 2 parameters (not 3 from the comma inside max())");
+        }
+        
+        [Test]
+        public void Test20_FindLongestFunction_PicksRealImplementation()
+        {
+            string source = @"
+#if FEATURE_DISABLED
+float4 frag(Interpolators input) : SV_Target { discard; return 0; }
+#else
+float4 frag(Interpolators input) : SV_Target
+{
+    // This is the real implementation with more code
+    float4 color = float4(1, 0, 0, 1);
+    color.rgb *= _Tint.rgb;
+    return color;
+}
+#endif";
+            var info = ShaderFunctionUtility.FindLongestFunction(source, "frag");
+            Assert.IsNotNull(info, "Should find the function");
+            Assert.IsTrue(info.Value.Body.Contains("_Tint"),
+                "Should pick the longer (real) implementation, not the stub");
+        }
+        
+        //=============================================================================
         // Test Compiling: Test that all the shaders compile correctly
         //=============================================================================
         static string[] AllTestShaders = new[]
@@ -1288,6 +1712,7 @@ namespace FS.Shaders.Editor.Tests
             "Test02_VertexFuncInHLSLINCLUDE.shader",
             // ... all of them
             "Test18_ForwardBodyInjection_CustomVarNames.shader",
+            "Test19_InheritParent.shader",
         };
 
         [Test]

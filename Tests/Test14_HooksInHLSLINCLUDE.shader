@@ -2,14 +2,14 @@
 // TEST 14: Hooks Defined in HLSLINCLUDE
 // 
 // Tests: Hook pragmas in the pass, but hook function BODIES in HLSLINCLUDE.
-// This is a valid authoring pattern — shared code in HLSLINCLUDE, pass just
+// This is a valid authoring pattern - shared code in HLSLINCLUDE, pass just
 // declares which hooks to use.
 //
 // Expected: 
 //   - vertexDisplacement function found in HLSLINCLUDE, extracted, rewritten
 //     per generated pass (ShadowCasterAttributes, DepthOnlyAttributes, etc.)
 //   - alphaClip function found in HLSLINCLUDE, same treatment
-//   - interpolatorTransfer stays in pass (control case — should still work)
+//   - interpolatorTransfer stays in pass (control case - should still work)
 //   - Generated passes have all three hooks with correct struct names
 //   - Forward pass compiles with original struct names from HLSLINCLUDE
 // =============================================================================
@@ -62,7 +62,7 @@ Shader "Tests/14_HooksInHLSLINCLUDE"
         };
 
         // =====================================================================
-        // Hook function bodies in HLSLINCLUDE — shared across all passes
+        // Hook function bodies in HLSLINCLUDE - shared across all passes
         // =====================================================================
 
         void HeightDisplace(inout Attributes input)

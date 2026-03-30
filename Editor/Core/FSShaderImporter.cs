@@ -18,6 +18,21 @@ namespace FS.Shaders.Editor
         {
             string source = File.ReadAllText(ctx.assetPath);
             
+            // Clear template cache so modified templates are picked up on reimport
+            TemplateEngine.ClearCache();
+            
+            // Resolve inheritance - if this shader declares "Inherit" = "Parent",
+            // the parent source is loaded, name is replaced, and tags are merged.
+            // The rest of the pipeline sees a complete shader source.
+            var inheritResult = ShaderInheritance.Resolve(source, ctx.assetPath);
+            source = inheritResult.Source;
+            
+            // Register dependency on parent so this shader reimports when the parent changes
+            if (inheritResult.ParentPath != null)
+            {
+                ctx.DependsOnSourceAsset(inheritResult.ParentPath);
+            }
+            
             // Process the shader
             var processor = new ShaderProcessor();
             string processed = processor.Process(source, ctx.assetPath);
@@ -69,9 +84,16 @@ namespace FS.Shaders.Editor
         static bool IsShaderGenNeeded(string source)
         {
             // Check for ShaderGen tag in either Pass or SubShader scope
-            return Regex.IsMatch(source,
+            if (Regex.IsMatch(source,
                 @"[""']ShaderGen[""']\s*=\s*[""']True[""']",
-                RegexOptions.IgnoreCase);
+                RegexOptions.IgnoreCase))
+                return true;
+            
+            // Check for Inherit tag (child shader inheriting from a parent)
+            if (ShaderInheritance.UsesInheritance(source))
+                return true;
+            
+            return false;
         }
     }
     
@@ -88,6 +110,7 @@ namespace FS.Shaders.Editor
         bool m_ShowPasses = true;
         bool m_ShowTagProcessors = true;
         ShaderContext m_ParsedContext;
+        ShaderInheritance.ResolveResult m_InheritResult;
         
         public override void OnEnable()
         {
@@ -103,6 +126,11 @@ namespace FS.Shaders.Editor
             try
             {
                 string source = File.ReadAllText(importer.assetPath);
+                
+                // Resolve inheritance so the inspector shows the merged state
+                m_InheritResult = ShaderInheritance.Resolve(source, importer.assetPath);
+                source = m_InheritResult.Source;
+                
                 m_ParsedContext = new ShaderContext
                 {
                     ProcessedSource = source,
@@ -123,6 +151,17 @@ namespace FS.Shaders.Editor
             
             EditorGUILayout.LabelField("ShaderGen Processor", EditorStyles.boldLabel);
             EditorGUILayout.Space();
+            
+            // Inheritance info (shown when using Inherit tag)
+            bool bInherited = m_InheritResult.ParentName != null;
+            if (bInherited)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Inherits from \"{m_InheritResult.ParentName}\"",
+                    MessageType.Info);
+                EditorGUILayout.LabelField("Parent Path", m_InheritResult.ParentPath ?? "Not found");
+                EditorGUILayout.Space();
+            }
             
             // ShaderGen Info section
             m_ShowShaderGen = EditorGUILayout.Foldout(m_ShowShaderGen, "ShaderGen Status", true);
@@ -229,7 +268,7 @@ namespace FS.Shaders.Editor
                     
                     // Check SubShader tags
                     if (m_ParsedContext.SubShaderTags.TryGetValue(proc.TagName, out string val))
-                        enabled = IsTagEnabled(val);
+                        enabled = ShaderTagUtility.IsTagEnabled(val);
                     
                     // Check pass-level tags
                     if (!enabled)
@@ -284,9 +323,9 @@ namespace FS.Shaders.Editor
         void DrawShaderGenStatus()
         {
             // Source pass info
-            if (m_ParsedContext.ForwardPass != null)
+            if (m_ParsedContext.ReferencePass != null)
             {
-                string passName = m_ParsedContext.ForwardPass.Name ?? m_ParsedContext.ForwardPass.LightMode ?? "Unnamed";
+                string passName = m_ParsedContext.ReferencePass.Name ?? m_ParsedContext.ReferencePass.LightMode ?? "Unnamed";
                 
                 // Determine how the pass was selected
                 string selectionReason;
@@ -299,7 +338,7 @@ namespace FS.Shaders.Editor
                 }
                 else if (m_ParsedContext.ShaderGenInSubShader)
                 {
-                    if (m_ParsedContext.ForwardPass.LightMode == "UniversalForward")
+                    if (m_ParsedContext.ReferencePass.LightMode == "UniversalForward")
                     {
                         selectionReason = "Fallback: UniversalForward LightMode";
                     }
@@ -328,14 +367,21 @@ namespace FS.Shaders.Editor
                 // Show vertex/fragment functions
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Entry Points:", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField("  Vertex", m_ParsedContext.ForwardVertexFunctionName ?? "Not found");
-                EditorGUILayout.LabelField("  Fragment", m_ParsedContext.ForwardFragmentFunctionName ?? "Not found");
+                EditorGUILayout.LabelField("  Vertex", m_ParsedContext.ReferenceVertexFunctionName ?? "Not found");
+                EditorGUILayout.LabelField("  Fragment", m_ParsedContext.ReferenceFragmentFunctionName ?? "Not found");
             }
             else
             {
-                EditorGUILayout.HelpBox(
-                    "No source pass found. Add \"ShaderGen\" = \"True\" to a pass or SubShader tags.",
-                    MessageType.Error);
+                if (m_InheritResult.ParentName != null)
+                {
+                    EditorGUILayout.LabelField("Source Pass", $"Inherited from \"{m_InheritResult.ParentName}\"");
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "No source pass found. Add \"ShaderGen\" = \"True\" to a pass or SubShader tags.",
+                        MessageType.Error);
+                }
             }
             
             // Features enabled
@@ -374,12 +420,6 @@ namespace FS.Shaders.Editor
             EditorGUILayout.LabelField(pragma, status);
         }
         
-        static bool IsTagEnabled(string value)
-        {
-            if (string.IsNullOrEmpty(value)) return false;
-            value = value.Trim().ToLowerInvariant();
-            return value == "on" || value == "true" || value == "enabled" || value == "1" || value == "yes";
-        }
         
         void ShowProcessedShader()
         {
@@ -389,6 +429,11 @@ namespace FS.Shaders.Editor
             try
             {
                 string source = File.ReadAllText(importer.assetPath);
+                
+                // Resolve inheritance so the preview shows the merged result
+                var inheritResult = ShaderInheritance.Resolve(source, importer.assetPath);
+                source = inheritResult.Source;
+                
                 var processor = new ShaderProcessor();
                 string processed = processor.Process(source, importer.assetPath);
                 ProcessedShaderWindow.Show(processed, importer.assetPath);
@@ -411,6 +456,7 @@ namespace FS.Shaders.Editor
         GUIStyle m_TextStyle;
         bool m_WordWrap;
         string m_SearchText = "";
+        int m_LineCount;
         
         public static void Show(string source, string shaderPath)
         {
@@ -418,6 +464,7 @@ namespace FS.Shaders.Editor
             window.titleContent = new GUIContent("Processed: " + Path.GetFileName(shaderPath));
             window.m_Source = source;
             window.m_ShaderPath = shaderPath;
+            window.m_LineCount = source.Split('\n').Length;
             window.minSize = new Vector2(700, 500);
             window.Show();
         }
@@ -450,7 +497,7 @@ namespace FS.Shaders.Editor
             
             // Stats bar
             EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-            EditorGUILayout.LabelField($"Lines: {m_Source.Split('\n').Length}", GUILayout.Width(100));
+            EditorGUILayout.LabelField($"Lines: {m_LineCount}", GUILayout.Width(100));
             EditorGUILayout.LabelField($"Chars: {m_Source.Length:N0}", GUILayout.Width(120));
             EditorGUILayout.EndHorizontal();
             

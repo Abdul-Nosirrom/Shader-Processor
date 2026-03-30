@@ -46,6 +46,18 @@ namespace FS.Shaders.Editor
         /// Example: "VERTEX_DISPLACEMENT_CALL" → template uses {{VERTEX_DISPLACEMENT_CALL}}
         /// </summary>
         public abstract string TemplateMarker { get; }
+        
+        /// <summary>
+        /// Expected number of parameters in the hook function signature.
+        /// Used for validation at parse time. Return -1 to skip validation.
+        /// </summary>
+        public virtual int ExpectedParameterCount => -1;
+        
+        /// <summary>
+        /// Human-readable expected signature for error messages.
+        /// Example: "void FuncName(inout Attributes input)"
+        /// </summary>
+        public virtual string ExpectedSignature => null;
     }
     
     //=============================================================================
@@ -63,6 +75,8 @@ namespace FS.Shaders.Editor
         public override string Define => "FS_VERTEX_DISPLACEMENT";
         public override string CallPattern => "{FuncName}(input);";
         public override string TemplateMarker => "VERTEX_DISPLACEMENT_CALL";
+        public override int ExpectedParameterCount => 1;
+        public override string ExpectedSignature => "void FuncName(inout Attributes input)";
     }
     
     /// <summary>
@@ -76,6 +90,8 @@ namespace FS.Shaders.Editor
         public override string Define => "FS_INTERPOLATOR_TRANSFER";
         public override string CallPattern => "{FuncName}(input, output);";
         public override string TemplateMarker => "INTERPOLATOR_TRANSFER_CALL";
+        public override int ExpectedParameterCount => 2;
+        public override string ExpectedSignature => "void FuncName(Attributes input, inout Interpolators output)";
     }
     
     /// <summary>
@@ -89,6 +105,8 @@ namespace FS.Shaders.Editor
         public override string Define => "FS_ALPHA_CLIP";
         public override string CallPattern => "{FuncName}(input);";
         public override string TemplateMarker => "ALPHA_CLIP_CALL";
+        public override int ExpectedParameterCount => 1;
+        public override string ExpectedSignature => "void FuncName(Interpolators input)";
     }
 
     /// <summary>
@@ -103,5 +121,7 @@ namespace FS.Shaders.Editor
         public override string Define => "FS_TESSELLATION_FACTOR_OVERRIDE";
         public override string CallPattern => "{FuncName}(_overrideFactor, input);";
         public override string TemplateMarker => "TESSELLATION_FACTOR_OVERRIDE_CALL";
+        public override int ExpectedParameterCount => 2;
+        public override string ExpectedSignature => "void FuncName(inout float tessFactor, Attributes input)";
     }
 }

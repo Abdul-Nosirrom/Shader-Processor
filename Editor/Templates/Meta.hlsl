@@ -13,7 +13,6 @@ Pass
     #pragma vertex MetaPassVertex
     #pragma fragment MetaPassFragment
     
-    #pragma multi_compile_instancing
     #pragma multi_compile _ EDITOR_VISUALIZATION
     
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -63,7 +62,7 @@ Pass
     // -------------------------------------------------------------------------
     // Fragment
     // -------------------------------------------------------------------------
-    half4 MetaPassFragment(MetaInterpolators input) : SV_TARGET
+    half4 MetaPassFragment(MetaInterpolators input{{EXTRA_FRAG_PARAMS}}) : SV_TARGET
     {
         UNITY_SETUP_INSTANCE_ID(input);
         

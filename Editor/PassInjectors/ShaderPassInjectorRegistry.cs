@@ -22,6 +22,10 @@ namespace FS.Shaders.Editor
         // Initialization
         //=============================================================================
         
+        /// <summary>
+        /// Discover and register all pass injectors via TypeCache.
+        /// Safe to call multiple times - subsequent calls are no-ops.
+        /// </summary>
         public static void Initialize()
         {
             if (s_Initialized) return;
@@ -176,6 +180,7 @@ namespace FS.Shaders.Editor
     
             // Determine which injectors are active based on markers in the source
             var activeInjectors = new List<ShaderPassInjector>();
+            var activePassNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     
             // [InjectBasePasses] activates all base passes
             int basePassIdx = 0;
@@ -184,7 +189,10 @@ namespace FS.Shaders.Editor
                 if (!ShaderProcessor.IsInComment(source, basePassIdx))
                 {
                     foreach (var injector in BasePasses)
+                    {
                         activeInjectors.Add(injector);
+                        activePassNames.Add(injector.PassName);
+                    }
                     break;
                 }
                 basePassIdx += "[InjectBasePasses]".Length;
@@ -193,7 +201,7 @@ namespace FS.Shaders.Editor
             // [InjectPass:X] activates specific passes
             foreach (var injector in s_Injectors)
             {
-                if (activeInjectors.Contains(injector))
+                if (activePassNames.Contains(injector.PassName))
                     continue;
 
                 string marker = $"[InjectPass:{injector.PassName}]";
@@ -233,6 +241,9 @@ namespace FS.Shaders.Editor
         // Reload
         //=============================================================================
         
+        /// <summary>
+        /// Force re-discovery of all pass injectors. Clears existing state first.
+        /// </summary>
         public static void Reinitialize()
         {
             s_Initialized = false;

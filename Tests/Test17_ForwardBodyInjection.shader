@@ -8,7 +8,7 @@
 //   - Struct names rewritten in both vertex and fragment
 //   - fragmentOutput pragmas map variable names for Meta/DepthNormals
 //   - UVs, normals, tangents all transferred via vertex injection
-//   - No manual hooks needed — tag handles everything
+//   - No manual hooks needed - tag handles everything
 // =============================================================================
 Shader "Tests/17_ForwardBodyInjection"
 {

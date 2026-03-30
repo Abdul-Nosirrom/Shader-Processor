@@ -16,6 +16,8 @@
 
 {{HOOK_DEFINES}}
 
+#define BARY_INTERP(field) (patch[0].field * bary.x + patch[1].field * bary.y + patch[2].field * bary.z)
+
 #ifdef _TESSELLATION
 
 // Default mode if none specified
@@ -229,8 +231,6 @@ TessControlPoint Hull(InputPatch<TessControlPoint, 3> patch, uint id : SV_Output
     
     UNITY_TRANSFER_INSTANCE_ID(patch[0], input);
     
-    #define BARY_INTERP(field) (patch[0].field * bary.x + patch[1].field * bary.y + patch[2].field * bary.z)
-    
 {{DOMAIN_INTERPOLATION}}
     
     #ifdef TESS_PHONG
@@ -249,8 +249,6 @@ TessControlPoint Hull(InputPatch<TessControlPoint, 3> patch, uint id : SV_Output
         
         input.positionOS = float4(TransformWorldToObject(posWS), 1);
     #endif
-    
-    #undef BARY_INTERP
     
     return {{VERTEX_FUNCTION}}(input);
 }
@@ -306,9 +304,11 @@ TessControlPoint Hull(InputPatch<TessControlPoint, 3> patch, uint id : SV_Output
     {{ATTRIBUTES_NAME}} input = ({{ATTRIBUTES_NAME}})0;
     UNITY_TRANSFER_INSTANCE_ID(patch[0], input);
     
-{{DOMAIN_INTERPOLATION_PASSTHROUGH}}
+{{DOMAIN_INTERPOLATION}}
     
     return {{VERTEX_FUNCTION}}(input);
 }
+
+#undef BARY_INTERP
 
 #endif // _TESSELLATION
