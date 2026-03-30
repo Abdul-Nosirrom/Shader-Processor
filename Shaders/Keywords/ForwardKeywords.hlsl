@@ -3,7 +3,7 @@
 // =============================================================================
 // FORWARD_KEYWORDS.HLSL
 // Complete keyword set for forward rendering passes.
-// Use: #include_with_pragmas "Library/Keywords/ForwardKeywords.hlsl"
+// Use: #include_with_pragmas "ForwardKeywords.hlsl"
 //
 // This is a convenience file that includes all keywords typically needed
 // for a fully-featured forward lit pass. For simpler shaders, you can
@@ -15,19 +15,19 @@
 // =============================================================================
 
 // Common (target, LOD, fog, debug)
-#include_with_pragmas "Library/Keywords/CommonKeywords.hlsl"
+#include_with_pragmas "CommonKeywords.hlsl"
 
 // Realtime lighting and shadows
-#include_with_pragmas "Library/Keywords/LightingKeywords.hlsl"
+#include_with_pragmas "LightingKeywords.hlsl"
 
 // Baked lighting (lightmaps, probes, mixed lighting)
-#include_with_pragmas "Library/Keywords/BakedGIKeywords.hlsl"
+#include_with_pragmas "BakedGIKeywords.hlsl"
 
 // GPU instancing and DOTS
-#include_with_pragmas "Library/Keywords/DOTSInstancing.hlsl"
+#include_with_pragmas "DOTSInstancing.hlsl"
 
 // Decal support
-#include_with_pragmas "Library/Keywords/DecalKeywords.hlsl"
+#include_with_pragmas "DecalKeywords.hlsl"
 
 // -----------------------------------------------------------------------------
 // Rendering Layers (for light layers with instancing)
