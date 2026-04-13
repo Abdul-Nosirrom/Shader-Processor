@@ -30,6 +30,28 @@ namespace FS.Shaders.Editor
         /// <summary>Content of HLSLINCLUDE block (without HLSLINCLUDE/ENDHLSL tags).</summary>
         public string HlslIncludeBlock;
         
+        /// <summary>
+        /// HLSLINCLUDE content with #include directives inlined (for parsing only).
+        /// Contains the same content as HlslIncludeBlock but with user includes resolved
+        /// so that struct, function, and CBUFFER parsing can see definitions from included files.
+        /// Null if no includes were resolved (in which case HlslIncludeBlock is used directly).
+        /// </summary>
+        public string ResolvedHlslInclude;
+        
+        /// <summary>
+        /// Build a combined search source for parsing operations. Combines the resolved
+        /// HLSLINCLUDE with a pass's HLSL program content. Most parsing operations
+        /// (function finding, struct detection, pragma reading) search this combined
+        /// source since definitions may be in either location.
+        /// </summary>
+        public string BuildSearchSource(string passHlsl = null)
+        {
+            string hlsl = ResolvedHlslInclude ?? HlslIncludeBlock ?? "";
+            if (!string.IsNullOrEmpty(passHlsl))
+                return hlsl + "\n" + passHlsl;
+            return hlsl;
+        }
+        
         /// <summary>Content of Properties block (without Properties { }).</summary>
         public string PropertiesBlock;
         
@@ -117,6 +139,19 @@ namespace FS.Shaders.Editor
         /// <summary>Active hooks parsed from reference pass pragmas.</summary>
         public HookState Hooks = new HookState();
         
+        //=============================================================================
+        // Pass Generation State (temporary, set during ProcessPassTemplate)
+        //=============================================================================
+
+        /// <summary>
+        /// The resolved Attributes struct for the pass currently being generated.
+        /// Combines base Attributes with any additional fields from the pass injector.
+        /// Tag processors should use this (when non-null) instead of Attributes for
+        /// per-pass field generation (e.g., tessellation TessControlPoint).
+        /// Null outside of pass generation.
+        /// </summary>
+        public StructDefinition CurrentPassAttributes;
+
         //=============================================================================
         // Tag Processor State
         //=============================================================================
@@ -231,7 +266,7 @@ namespace FS.Shaders.Editor
         {
             foreach (var field in Fields)
             {
-                if (field.Semantic == semantic)
+                if (string.Equals(field.Semantic, semantic, System.StringComparison.OrdinalIgnoreCase))
                     return field;
             }
             return null;

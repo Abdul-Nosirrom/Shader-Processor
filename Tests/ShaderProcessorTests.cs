@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
@@ -1704,6 +1705,160 @@ float4 frag(Interpolators input) : SV_Target
         }
         
         //=============================================================================
+        // Test 21: Include Resolution
+        //=============================================================================
+        
+        [Test]
+        public void Test21_IncludeResolution_GeneratesAllPasses()
+        {
+            string output = ProcessTestShader("Test21_IncludeResolution.shader");
+            
+            Assert.IsTrue(output.Contains("Name \"ShadowCaster\""), "Missing ShadowCaster pass");
+            Assert.IsTrue(output.Contains("Name \"DepthOnly\""), "Missing DepthOnly pass");
+            Assert.IsTrue(output.Contains("Name \"DepthNormals\""), "Missing DepthNormals pass");
+            Assert.IsTrue(output.Contains("Name \"MotionVectors\""), "Missing MotionVectors pass");
+            Assert.IsTrue(output.Contains("Name \"Meta\""), "Missing Meta pass");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolution_StructNamesDetected()
+        {
+            // Structs are in Test21_SharedInclude.hlsl, not in the shader file.
+            // If include resolution works, the pipeline finds them and generates
+            // per-pass struct variants.
+            string output = ProcessTestShader("Test21_IncludeResolution.shader");
+            
+            Assert.IsTrue(output.Contains("struct ShadowCasterAttributes"),
+                "Missing ShadowCasterAttributes (struct detection from include failed)");
+            Assert.IsTrue(output.Contains("struct DepthOnlyAttributes"),
+                "Missing DepthOnlyAttributes (struct detection from include failed)");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolution_CBufferNotDuplicated()
+        {
+            // CBUFFER is in Test21_SharedInclude.hlsl, referenced via #include.
+            // The output keeps the #include line (not inlined), so CBUFFER_START
+            // doesn't appear in the output text at all. The key test is that the
+            // resolver detected CBufferInHlslInclude = true, so generated passes
+            // have empty Material Data sections (no CBUFFER duplication).
+            string output = ProcessTestShader("Test21_IncludeResolution.shader");
+            
+            int cbufferCount = CountOccurrences(output, "CBUFFER_START(UnityPerMaterial)");
+            Assert.AreEqual(0, cbufferCount,
+                "CBUFFER is inside the include file, should not appear in output text. " +
+                "Generated passes should have empty Material Data (CBUFFER shared via HLSLINCLUDE include).");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolution_TexturesNotDuplicated()
+        {
+            // Textures are in Test21_SharedInclude.hlsl, referenced via #include.
+            // Same as CBUFFER: the resolver detected TexturesInHlslInclude = true,
+            // so generated passes don't emit their own texture declarations.
+            string output = ProcessTestShader("Test21_IncludeResolution.shader");
+            
+            int texCount = CountOccurrences(output, "TEXTURE2D(_BaseMap)");
+            Assert.AreEqual(0, texCount,
+                "Textures are inside the include file, should not appear in output text. " +
+                "Generated passes should have empty Material Data (textures shared via HLSLINCLUDE include).");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolution_HookFromInclude_GeneratesPasses()
+        {
+            string output = ProcessTestShader("Test21_IncludeResolution_Hook.shader");
+            
+            Assert.IsTrue(output.Contains("Name \"ShadowCaster\""), "Missing ShadowCaster pass");
+            Assert.IsTrue(output.Contains("Name \"DepthOnly\""), "Missing DepthOnly pass");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolution_HookFromInclude_FunctionPrefixed()
+        {
+            // The displaceVertex function is in Test21_SharedHook.hlsl.
+            // If include resolution works, the pipeline finds the function body,
+            // registers it as a vertexDisplacement hook, and prefixes it per pass.
+            string output = ProcessTestShader("Test21_IncludeResolution_Hook.shader");
+            
+            Assert.IsTrue(output.Contains("ShadowCasterdisplaceVertex"),
+                "Hook function from include should be prefixed in ShadowCaster pass");
+            Assert.IsTrue(output.Contains("DepthOnlydisplaceVertex"),
+                "Hook function from include should be prefixed in DepthOnly pass");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolution_HookFromInclude_StructsRewritten()
+        {
+            string output = ProcessTestShader("Test21_IncludeResolution_Hook.shader");
+            
+            // The hook function takes "inout Attributes input". In generated passes,
+            // "Attributes" should be rewritten to the pass-specific name.
+            Assert.IsTrue(output.Contains("inout ShadowCasterAttributes"),
+                "Hook function struct param should be rewritten in ShadowCaster");
+            Assert.IsTrue(output.Contains("inout DepthOnlyAttributes"),
+                "Hook function struct param should be rewritten in DepthOnly");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolver_SkipsUnityPackageIncludes()
+        {
+            // Unit test: the default filter skips Packages/com.unity.* includes
+            string source =
+                "#include \"Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl\"\n" +
+                "float _MyValue;";
+            
+            string resolved = ShaderIncludeResolver.Resolve(source, "");
+            
+            Assert.IsTrue(resolved.Contains(
+                "#include \"Packages/com.unity.render-pipelines.universal"),
+                "URP includes should be left as-is");
+            Assert.IsTrue(resolved.Contains("_MyValue"),
+                "Non-include content should be preserved");
+        }
+        
+        [Test]
+        public void Test21_IncludeResolver_NullAndEmptySource()
+        {
+            Assert.IsNull(ShaderIncludeResolver.Resolve(null, ""),
+                "Null source should return null");
+            Assert.AreEqual("", ShaderIncludeResolver.Resolve("", ""),
+                "Empty source should return empty");
+        }
+        
+        [Test]
+        public void Test21_BuildSearchSource_PrefersResolvedOverRaw()
+        {
+            var ctx = new ShaderContext
+            {
+                HlslIncludeBlock = "float _RawOnly;",
+                ResolvedHlslInclude = "float _RawOnly;\nfloat _FromInclude;"
+            };
+            
+            string search = ctx.BuildSearchSource("float _PassVar;");
+            
+            Assert.IsTrue(search.Contains("_FromInclude"),
+                "Should use ResolvedHlslInclude which has the include content");
+            Assert.IsTrue(search.Contains("_PassVar"),
+                "Should append pass HLSL");
+        }
+        
+        [Test]
+        public void Test21_BuildSearchSource_FallsBackToRawWhenNoResolved()
+        {
+            var ctx = new ShaderContext
+            {
+                HlslIncludeBlock = "float _RawVar;",
+                ResolvedHlslInclude = null
+            };
+            
+            string search = ctx.BuildSearchSource();
+            
+            Assert.IsTrue(search.Contains("_RawVar"),
+                "Should fall back to HlslIncludeBlock when ResolvedHlslInclude is null");
+        }
+        
+        //=============================================================================
         // Test Compiling: Test that all the shaders compile correctly
         //=============================================================================
         static string[] AllTestShaders = new[]
@@ -1713,6 +1868,9 @@ float4 frag(Interpolators input) : SV_Target
             // ... all of them
             "Test18_ForwardBodyInjection_CustomVarNames.shader",
             "Test19_InheritParent.shader",
+            // Test21 shaders excluded: they use relative #include paths that
+            // can't resolve via ShaderUtil.CreateShaderAsset (no file context).
+            // They compile correctly when imported from disk via FSShaderImporter.
         };
 
         [Test]
@@ -1723,7 +1881,7 @@ float4 frag(Interpolators input) : SV_Target
             Shader shader = ShaderUtil.CreateShaderAsset(output, false);
             Assert.IsFalse(ShaderUtil.ShaderHasError(shader),
                 $"{testFile} has compilation errors after processing");
-            Object.DestroyImmediate(shader);
+            UnityEngine.Object.DestroyImmediate(shader);
         }
     }
 }

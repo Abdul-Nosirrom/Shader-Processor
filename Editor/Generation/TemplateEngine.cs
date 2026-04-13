@@ -205,7 +205,12 @@ namespace FS.Shaders.Editor
             // Empty defaults for tag processor markers
             replacements["TESSELLATION_PRAGMAS"] = "";
             replacements["TESSELLATION_CODE"] = "";
-            
+
+            // Resolve the pass-specific Attributes struct so tag processors can see
+            // any fields the pass injector adds (e.g., NORMAL for ShadowCaster).
+            var injector = ShaderPassInjectorRegistry.GetByName(passName);
+            ctx.CurrentPassAttributes = ResolvePassAttributes(ctx, injector);
+
             // Let tag processors contribute replacements
             foreach (var processor in ShaderTagProcessorRegistry.GetEnabledProcessors(ctx))
             {
@@ -216,14 +221,16 @@ namespace FS.Shaders.Editor
                         replacements[kvp.Key] = kvp.Value;
                 }
             }
-            
+
+            ctx.CurrentPassAttributes = null;
+
             // Merge additional replacements (highest priority)
             if (additionalReplacements != null)
             {
                 foreach (var kvp in additionalReplacements)
                     replacements[kvp.Key] = kvp.Value;
             }
-            
+
             return Process(template, replacements);
         }
         
@@ -286,6 +293,52 @@ namespace FS.Shaders.Editor
                                      ?? "normalWS";
         }
         
+        //=============================================================================
+        // Pass Attribute Resolution
+        //=============================================================================
+
+        /// <summary>
+        /// Build the resolved Attributes struct for a generated pass.
+        /// Merges the user's base Attributes with any additional fields the pass
+        /// injector declares (e.g., ShadowCaster adding NORMAL). Returns the base
+        /// struct unchanged if the injector adds nothing.
+        /// </summary>
+        static StructDefinition ResolvePassAttributes(ShaderContext ctx, ShaderPassInjector injector)
+        {
+            if (ctx.Attributes == null) return null;
+
+            string[] additionalFields = injector?.GetAdditionalAttributeFields(ctx);
+            if (additionalFields == null) return ctx.Attributes;
+
+            var parsed = StructGenerator.ParseFieldDeclarations(additionalFields);
+            if (parsed == null || parsed.Count == 0) return ctx.Attributes;
+
+            // Build a new StructDefinition with base fields + injector fields (deduped)
+            var resolved = new StructDefinition
+            {
+                Name = ctx.Attributes.Name,
+                Fields = new System.Collections.Generic.List<StructField>(ctx.Attributes.Fields)
+            };
+
+            var existingNames = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            foreach (var f in ctx.Attributes.Fields)
+            {
+                if (!f.IsMacro && !string.IsNullOrEmpty(f.Name))
+                    existingNames.Add(f.Name);
+            }
+
+            foreach (var f in parsed)
+            {
+                if (!existingNames.Contains(f.Name))
+                {
+                    resolved.Fields.Add(f);
+                    existingNames.Add(f.Name);
+                }
+            }
+
+            return resolved;
+        }
+
         //=============================================================================
         // Code Generation
         //=============================================================================

@@ -58,7 +58,7 @@ namespace FS.Shaders.Editor
             
             // Generate dynamic field handling from this pass's struct
             var fieldGeneration = GenerateFieldCode(attrStruct, attrName);
-            
+
             var tessReplacements = new Dictionary<string, string>
             {
                 ["ATTRIBUTES_NAME"] = attrName,
@@ -67,6 +67,8 @@ namespace FS.Shaders.Editor
                 ["TESS_CONTROL_POINT_FIELDS"] = fieldGeneration.ControlPointFields,
                 ["TESS_VERTEX_BODY"] = fieldGeneration.VertexBody,
                 ["DOMAIN_INTERPOLATION"] = fieldGeneration.DomainInterpolation,
+                ["POSITION"] = attrStruct?.GetField("POSITION")?.Name ?? "positionOS",
+                ["NORMAL"] = attrStruct?.GetField("NORMAL")?.Name ?? "normalOS",
             };
             
             TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName, pass.Name ?? "");
@@ -126,9 +128,10 @@ namespace FS.Shaders.Editor
             string interpName = passName + "Interpolators";
             string vertexFunc = passName + "Vertex";
             
-            // Generate dynamic field handling
-            var fieldGeneration = GenerateFieldCode(ctx.Attributes, attrName);
-            
+            // Use the resolved struct (includes fields the pass injector adds, e.g. NORMAL)
+            var resolvedAttrs = ctx.CurrentPassAttributes ?? ctx.Attributes;
+            var fieldGeneration = GenerateFieldCode(resolvedAttrs, attrName);
+
             var tessReplacements = new Dictionary<string, string>
             {
                 ["ATTRIBUTES_NAME"] = attrName,
@@ -137,6 +140,8 @@ namespace FS.Shaders.Editor
                 ["TESS_CONTROL_POINT_FIELDS"] = fieldGeneration.ControlPointFields,
                 ["TESS_VERTEX_BODY"] = fieldGeneration.VertexBody,
                 ["DOMAIN_INTERPOLATION"] = fieldGeneration.DomainInterpolation,
+                ["POSITION"] = resolvedAttrs?.GetField("POSITION")?.Name ?? "positionOS",
+                ["NORMAL"] = resolvedAttrs?.GetField("NORMAL")?.Name ?? "normalOS",
             };
 
             TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName, passName);

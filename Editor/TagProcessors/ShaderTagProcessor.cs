@@ -257,22 +257,80 @@ namespace FS.Shaders.Editor
         /// Inject accumulated processor CBUFFER entries into the CBUFFER in source.
         /// Call this after both CollectMaterialEntries and CollectTagProcessorEntries
         /// have populated ctx.ProcessorCBufferEntries.
+        ///
+        /// Handles three source layouts:
+        ///   1. CBUFFER in HLSLINCLUDE - inserts before CBUFFER_END (shared across all passes)
+        ///   2. CBUFFER in a pass's HLSLPROGRAM - inserts before CBUFFER_END (pass-local)
+        ///   3. No CBUFFER anywhere - creates one in HLSLINCLUDE (or creates HLSLINCLUDE if needed)
         /// </summary>
         public static void InjectProcessorCBuffer(ShaderContext ctx)
         {
             if (string.IsNullOrEmpty(ctx.ProcessorCBufferEntries)) return;
-            
-            string result = ShaderBlockUtility.InsertBeforeCBufferEnd(
-                ctx.ProcessedSource,
-                ctx.ProcessorCBufferEntries.TrimEnd() + "\n            ");
-            
-            if (result == null)
+
+            string entries = ctx.ProcessorCBufferEntries.TrimEnd() + "\n            ";
+
+            // Cases 1 & 2: existing CBUFFER somewhere in source
+            string result = ShaderBlockUtility.InsertBeforeCBufferEnd(ctx.ProcessedSource, entries);
+            if (result != null)
             {
-                Debug.LogWarning("[ShaderProcessor] Could not find CBUFFER for injection");
+                ctx.ProcessedSource = result;
                 return;
             }
-            
-            ctx.ProcessedSource = result;
+
+            // Case 3: no CBUFFER in source. Create one in HLSLINCLUDE so all passes see it.
+            string cbufferBlock = FormatCBufferBlock(ctx.ProcessorCBufferEntries);
+
+            if (!string.IsNullOrEmpty(ctx.HlslIncludeBlock))
+            {
+                // HLSLINCLUDE exists but has no CBUFFER. Append the block before ENDHLSL.
+                // The HLSLINCLUDE already has URP includes so CBUFFER_START macro is defined.
+                int hlslIncIdx = ctx.ProcessedSource.IndexOf("HLSLINCLUDE");
+                if (hlslIncIdx >= 0)
+                {
+                    int endHlsl = ctx.ProcessedSource.IndexOf("ENDHLSL", hlslIncIdx + "HLSLINCLUDE".Length);
+                    if (endHlsl > hlslIncIdx)
+                    {
+                        ctx.ProcessedSource = ctx.ProcessedSource.Insert(endHlsl,
+                            "\n    " + cbufferBlock + "\n    ");
+                        ctx.CBufferInHlslInclude = true;
+                        return;
+                    }
+                }
+            }
+
+            // No HLSLINCLUDE either. Create one with Core.hlsl (needed for CBUFFER_START macro)
+            // before the first Pass block. Core.hlsl has pragma-once so double-include is safe.
+            var passBlocks = ShaderBlockUtility.FindAllPassBlocks(ctx.ProcessedSource);
+            if (passBlocks.Count > 0)
+            {
+                string hlslInclude =
+                    "\n    HLSLINCLUDE" +
+                    "\n    #include \"Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl\"" +
+                    "\n\n    " + cbufferBlock +
+                    "\n    ENDHLSL\n\n    ";
+                ctx.ProcessedSource = ctx.ProcessedSource.Insert(passBlocks[0].StartIndex, hlslInclude);
+                ctx.CBufferInHlslInclude = true;
+                return;
+            }
+
+            Debug.LogWarning("[ShaderProcessor] No CBUFFER, HLSLINCLUDE, or Pass blocks found for CBUFFER injection");
+        }
+
+        /// <summary>
+        /// Format processor CBUFFER entries into a complete CBUFFER_START/CBUFFER_END block.
+        /// </summary>
+        static string FormatCBufferBlock(string entries)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("CBUFFER_START(UnityPerMaterial)");
+            foreach (string line in entries.Split('\n'))
+            {
+                string trimmed = line.Trim();
+                if (!string.IsNullOrEmpty(trimmed))
+                    sb.AppendLine("        " + trimmed);
+            }
+            sb.Append("    CBUFFER_END");
+            return sb.ToString();
         }
         
         /// <summary>

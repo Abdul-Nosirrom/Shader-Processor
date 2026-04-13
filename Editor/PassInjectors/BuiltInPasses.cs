@@ -17,7 +17,11 @@ namespace FS.Shaders.Editor
         public override string PassName => "ShadowCaster";
         public override string TemplateName => "ShadowCaster";
         public override bool IsBasePass => true;
-        
+
+        // Template references input.{{NORMAL}} for shadow bias calculation.
+        public override string[] GetAdditionalAttributeFields(ShaderContext ctx)
+            => StructGenerator.EnsureAttributeField(ctx, "NORMAL", "float3", "normalOS");
+
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
             => "return 0;";
     }
@@ -48,15 +52,14 @@ namespace FS.Shaders.Editor
         public override string PassName => "DepthNormals";
         public override string TemplateName => "DepthNormals";
         public override bool IsBasePass => true;
-        
-        public override Dictionary<string, string> GetStructOverrides(ShaderContext ctx)
-        {
-            return new Dictionary<string, string>
-            {
-                ["ATTRIBUTES_STRUCT"] = StructGenerator.GenerateDepthNormalsAttributes(ctx),
-                ["INTERPOLATORS_STRUCT"] = StructGenerator.GenerateDepthNormalsInterpolators(ctx)
-            };
-        }
+
+        // Pass needs NORMAL semantic in Attributes for world-space normal calculation
+        public override string[] GetAdditionalAttributeFields(ShaderContext ctx)
+            => StructGenerator.EnsureAttributeField(ctx, "NORMAL", "float3", "normalOS");
+
+        // Pass needs a normal field in Interpolators to output world-space normals
+        public override string[] GetAdditionalInterpolatorFields(ShaderContext ctx)
+            => StructGenerator.EnsureInterpolatorField(ctx, "float3", "normalWS", "NORMAL", "NORMALWS", "NORMAL_WS");
         
         public override Dictionary<string, string> GetAdditionalReplacements(ShaderContext ctx)
         {
@@ -83,7 +86,8 @@ namespace FS.Shaders.Editor
                     // Normalize variable names to match what BuildVertexBody will produce,
                     // so we can reliably check for 'output.normalWS'
                     string userInputName = ForwardBodyInjector.DetectParameterName(
-                        ctx.ReferencePass?.HlslProgram, ctx.ReferenceVertexFunctionName) ?? "input";
+                        ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram),
+                        ctx.ReferenceVertexFunctionName) ?? "input";
                     string userOutputName = ForwardBodyInjector.DetectOutputVariableName(
                         vertexBody, ctx.InterpolatorsStructName) ?? "output";
                     vertexBody = ForwardBodyInjector.NormalizeVariableNames(
@@ -121,15 +125,22 @@ namespace FS.Shaders.Editor
         public override string PassName => "MotionVectors";
         public override string TemplateName => "MotionVectors";
         public override bool IsBasePass => true;
-        
-        public override Dictionary<string, string> GetStructOverrides(ShaderContext ctx)
+
+        // Previous frame vertex position (and optional Alembic velocity)
+        public override string[] GetAdditionalAttributeFields(ShaderContext ctx) => new[]
         {
-            return new Dictionary<string, string>
-            {
-                ["ATTRIBUTES_STRUCT"] = StructGenerator.GenerateMotionVectorsAttributes(ctx),
-                ["INTERPOLATORS_STRUCT"] = StructGenerator.GenerateMotionVectorsInterpolators(ctx)
-            };
-        }
+            "float3 positionOld : TEXCOORD4;",
+            "#if defined(_ADD_PRECOMPUTED_VELOCITY)",
+            "float3 alembic : TEXCOORD5;",
+            "#endif"
+        };
+
+        // Current and previous clip-space positions for motion vector calculation
+        public override string[] GetAdditionalInterpolatorFields(ShaderContext ctx) => new[]
+        {
+            "float4 curPositionCS : TEXCOORD8;",
+            "float4 prevPositionCS : TEXCOORD9;"
+        };
         
         // curPositionCS/prevPositionCS are always named this way (from struct override)
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
@@ -150,13 +161,20 @@ namespace FS.Shaders.Editor
         public override string PassName => "Meta";
         public override string TemplateName => "Meta";
         public override bool IsBasePass => true;
-        
-        public override Dictionary<string, string> GetStructOverrides(ShaderContext ctx)
+
+        // UnityMetaVertexPosition needs TEXCOORD1 (static lightmap UV) and
+        // TEXCOORD2 (dynamic lightmap UV). Only added if not already present.
+        public override string[] GetAdditionalAttributeFields(ShaderContext ctx)
         {
-            return new Dictionary<string, string>
-            {
-                ["ATTRIBUTES_STRUCT"] = StructGenerator.GenerateMetaAttributes(ctx)
-            };
+            var fields = new System.Collections.Generic.List<string>();
+
+            if (ctx.Attributes?.HasField("TEXCOORD1") != true)
+                fields.Add("float2 uv1 : TEXCOORD1;");
+
+            if (ctx.Attributes?.HasField("TEXCOORD2") != true)
+                fields.Add("float2 uv2 : TEXCOORD2;");
+
+            return fields.Count > 0 ? fields.ToArray() : null;
         }
         
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
@@ -195,6 +213,10 @@ namespace FS.Shaders.Editor
         public override string PassName => "Outline";
         public override string TemplateName => "Outline";
         public override bool IsBasePass => false;
+
+        // Template references input.{{NORMAL}} for hull expansion.
+        public override string[] GetAdditionalAttributeFields(ShaderContext ctx)
+            => StructGenerator.EnsureAttributeField(ctx, "NORMAL", "float3", "normalOS");
         
         const string OutlineProperties = @"
         // Outlines (Auto-injected by FreeSkies)

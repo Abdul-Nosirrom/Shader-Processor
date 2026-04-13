@@ -129,13 +129,19 @@ namespace FS.Shaders.Editor
                         EditorGUI.BeginChangeCheck();
                         var minDist = mat.GetFloat(PROP_TESS_MIN_DIST);
                         var maxDist = mat.GetFloat(PROP_TESS_MAX_DIST);
-                        //var res = SirenixEditorFields.MinMaxSlider(
-                        //    new GUIContent("Min/Max Tess Distance", "Blend distances of tessellation factor"),
-                        //    new Vector2(minDist, maxDist), new Vector2(0, 128), true);
+
+                        EditorGUILayout.BeginHorizontal();
+                        EditorGUILayout.PrefixLabel(new GUIContent("Min/Max Distance",
+                            "Blend distances of tessellation factor"));
+                        minDist = EditorGUILayout.FloatField(minDist, GUILayout.Width(50f));
+                        EditorGUILayout.MinMaxSlider(ref minDist, ref maxDist, 0f, 128f);
+                        maxDist = EditorGUILayout.FloatField(maxDist, GUILayout.Width(50f));
+                        EditorGUILayout.EndHorizontal();
+
                         if (EditorGUI.EndChangeCheck())
                         {
-                            mat.SetFloat(PROP_TESS_MIN_DIST, 16);
-                            mat.SetFloat(PROP_TESS_MAX_DIST, 64);
+                            mat.SetFloat(PROP_TESS_MIN_DIST, Mathf.Clamp(minDist, 0f, maxDist));
+                            mat.SetFloat(PROP_TESS_MAX_DIST, Mathf.Clamp(maxDist, minDist, 128f));
                         }
                     }
                     EditorGUIUtility.labelWidth *= 2f;

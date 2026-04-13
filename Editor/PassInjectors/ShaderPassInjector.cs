@@ -54,11 +54,54 @@ namespace FS.Shaders.Editor
         public virtual string GetCBufferEntries(ShaderContext ctx) => null;
         
         /// <summary>
+        /// Additional attribute fields this pass requires beyond the user's base struct.
+        /// These field declaration strings (e.g., "float3 normalOS : NORMAL;") are appended
+        /// by GenerateAttributesStruct and also used by tag processors (e.g., Tessellation)
+        /// to build pass-aware control point structs.
+        /// Preprocessor guards ("#if defined(...)", "#endif") may be interleaved.
+        /// Return null if the pass uses the base struct as-is.
+        /// </summary>
+        public virtual string[] GetAdditionalAttributeFields(ShaderContext ctx) => null;
+
+        /// <summary>
+        /// Additional interpolator fields this pass requires beyond the user's base struct.
+        /// Same format and behavior as <see cref="GetAdditionalAttributeFields"/>.
+        /// </summary>
+        public virtual string[] GetAdditionalInterpolatorFields(ShaderContext ctx) => null;
+
+        /// <summary>
         /// Override struct generation for passes that need special fields.
         /// Return a dictionary with "ATTRIBUTES_STRUCT" and/or "INTERPOLATORS_STRUCT" keys.
         /// Return null to use default struct generation from ProcessPassTemplate.
+        ///
+        /// Default implementation builds overrides from GetAdditionalAttributeFields /
+        /// GetAdditionalInterpolatorFields. Only override this directly if you need
+        /// struct generation logic that goes beyond appending additional fields.
         /// </summary>
-        public virtual Dictionary<string, string> GetStructOverrides(ShaderContext ctx) => null;
+        public virtual Dictionary<string, string> GetStructOverrides(ShaderContext ctx)
+        {
+            string[] attrFields = GetAdditionalAttributeFields(ctx);
+            string[] interpFields = GetAdditionalInterpolatorFields(ctx);
+
+            if (attrFields == null && interpFields == null)
+                return null;
+
+            var overrides = new Dictionary<string, string>();
+
+            if (attrFields != null)
+            {
+                overrides["ATTRIBUTES_STRUCT"] = StructGenerator.GenerateAttributesStruct(
+                    ctx, PassName + "Attributes", attrFields);
+            }
+
+            if (interpFields != null)
+            {
+                overrides["INTERPOLATORS_STRUCT"] = StructGenerator.GenerateInterpolatorsStruct(
+                    ctx, PassName + "Interpolators", interpFields);
+            }
+
+            return overrides;
+        }
         
         /// <summary>
         /// Additional template replacements beyond what ProcessPassTemplate provides.

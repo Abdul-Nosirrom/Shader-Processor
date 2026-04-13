@@ -195,135 +195,115 @@ namespace FS.Shaders.Editor
         }
         
         //=============================================================================
-        // Pass-Specific Struct Variants
+        // Semantic Helpers
         //=============================================================================
-        
+
         /// <summary>
-        /// Generate MotionVectors-specific Attributes with previous position.
+        /// Returns an additional field entry for the given semantic if the user's
+        /// Attributes struct doesn't already have it. Returns null if present.
+        /// Used by passes whose templates reference a semantic that the user's
+        /// struct might not declare (e.g., NORMAL for ShadowCaster shadow bias).
         /// </summary>
-        public static string GenerateMotionVectorsAttributes(ShaderContext ctx)
+        public static string[] EnsureAttributeField(ShaderContext ctx, string semantic,
+            string defaultType, string defaultName)
         {
-            return GenerateAttributesStruct(ctx, "MotionVectorsAttributes", new[]
-            {
-                "float3 positionOld : TEXCOORD4;",
-                "#if defined(_ADD_PRECOMPUTED_VELOCITY)",
-                "float3 alembic : TEXCOORD5;",
-                "#endif"
-            });
-        }
-        
-        /// <summary>
-        /// Generate MotionVectors-specific Interpolators with current/previous clip positions.
-        /// </summary>
-        public static string GenerateMotionVectorsInterpolators(ShaderContext ctx)
-        {
-            return GenerateInterpolatorsStruct(ctx, "MotionVectorsInterpolators", new[]
-            {
-                "float4 curPositionCS : TEXCOORD8;",
-                "float4 prevPositionCS : TEXCOORD9;"
-            });
-        }
-        
-        /// <summary>
-        /// Generate Meta-specific Attributes.
-        /// 
-        /// The Meta pass needs TEXCOORD1 (static lightmap UV) and TEXCOORD2 (dynamic lightmap UV)
-        /// for UnityMetaVertexPosition. The template references these via semantic markers
-        /// ({{TEXCOORD1}}, {{TEXCOORD2}}) so existing fields are picked up by name automatically.
-        /// We only add fields for semantics that are genuinely missing from the user's struct.
-        /// </summary>
-        public static string GenerateMetaAttributes(ShaderContext ctx)
-        {
-            var additionalFields = new System.Collections.Generic.List<string>();
-            
-            // Add uv1 if no TEXCOORD1 exists (basic shaders without lightmap UVs)
-            if (ctx.Attributes?.HasField("TEXCOORD1") != true)
-            {
-                additionalFields.Add("float2 uv1 : TEXCOORD1;");
-            }
-            
-            // Add uv2 if no TEXCOORD2 exists (most shaders won't have dynamic lightmap UVs)
-            if (ctx.Attributes?.HasField("TEXCOORD2") != true)
-            {
-                additionalFields.Add("float2 uv2 : TEXCOORD2;");
-            }
-            
-            return GenerateAttributesStruct(ctx, "MetaAttributes",
-                additionalFields.Count > 0 ? additionalFields.ToArray() : null);
-        }
-        
-        /// <summary>
-        /// Generate DepthNormals-specific Attributes. Ensures NORMAL semantic exists
-        /// since the pass fundamentally needs normals to function.
-        /// </summary>
-        public static string GenerateDepthNormalsAttributes(ShaderContext ctx)
-        {
-            string[] additionalFields = null;
-            
-            // Resolve what {{NORMAL}} will be (same logic as AddSemanticReplacements)
-            string resolvedName = ctx.Attributes?.GetField("NORMAL")?.Name ?? "normalOS";
-            
-            // Check if a field with that name already exists (by any semantic)
-            bool fieldExists = false;
+            string resolvedName = ctx.Attributes?.GetField(semantic)?.Name ?? defaultName;
+
             if (ctx.Attributes?.Fields != null)
             {
                 foreach (var field in ctx.Attributes.Fields)
                 {
                     if (!field.IsMacro && field.Name == resolvedName)
-                    {
-                        fieldExists = true;
-                        break;
-                    }
+                        return null;
                 }
             }
-            
-            if (!fieldExists)
-            {
-                additionalFields = new[] { $"float3 {resolvedName} : NORMAL;" };
-            }
-            
-            return GenerateAttributesStruct(ctx, "DepthNormalsAttributes", additionalFields);
+
+            return new[] { $"{defaultType} {resolvedName} : {semantic};" };
         }
-        
+
         /// <summary>
-        /// Generate DepthNormals-specific Interpolators. Ensures a normal field exists
-        /// since the pass needs to output world-space normals.
-        /// 
-        /// Strategy: Resolve what {{NORMAL_WS}} will be (same logic as AddSemanticReplacements),
-        /// then check if that field already exists by name. Only add if truly missing.
-        /// This avoids duplicate field names when the user has e.g. "normalWS : TEXCOORD1".
+        /// Returns an additional field entry for the given semantic if the user's
+        /// Interpolators struct doesn't already have it. Returns null if present.
+        /// Tries multiple semantic conventions before falling back to the default name.
         /// </summary>
-        public static string GenerateDepthNormalsInterpolators(ShaderContext ctx)
+        public static string[] EnsureInterpolatorField(ShaderContext ctx, string defaultType,
+            string defaultName, params string[] semanticCandidates)
         {
-            string[] additionalFields = null;
-            
-            // Resolve the field name that {{NORMAL_WS}} will map to
-            // (mirrors AddSemanticReplacements logic)
-            string resolvedName = ctx.Interpolators?.GetField("NORMAL")?.Name
-                               ?? ctx.Interpolators?.GetField("NORMALWS")?.Name
-                               ?? ctx.Interpolators?.GetField("NORMAL_WS")?.Name
-                               ?? "normalWS";
-            
-            // Check if a field with that name already exists in the struct (by any semantic)
-            bool fieldExists = false;
+            // Resolve by trying each semantic candidate in order
+            string resolvedName = defaultName;
+            foreach (string semantic in semanticCandidates)
+            {
+                var field = ctx.Interpolators?.GetField(semantic);
+                if (field != null)
+                {
+                    resolvedName = field.Name;
+                    break;
+                }
+            }
+
             if (ctx.Interpolators?.Fields != null)
             {
                 foreach (var field in ctx.Interpolators.Fields)
                 {
                     if (!field.IsMacro && field.Name == resolvedName)
-                    {
-                        fieldExists = true;
-                        break;
-                    }
+                        return null;
                 }
             }
-            
-            if (!fieldExists)
+
+            // Use the first semantic candidate for the declaration
+            return new[] { $"{defaultType} {resolvedName} : {semanticCandidates[0]};" };
+        }
+
+        //=============================================================================
+        // Field Declaration Parsing
+        //=============================================================================
+
+        /// <summary>
+        /// Parse an array of field declaration strings into StructField objects.
+        /// Handles regular fields ("float3 normalOS : NORMAL;") and interleaved
+        /// preprocessor guards ("#if defined(...)", "#endif").
+        /// Used by TemplateEngine to build resolved structs for tag processors.
+        /// </summary>
+        public static List<StructField> ParseFieldDeclarations(string[] declarations)
+        {
+            if (declarations == null) return null;
+
+            var fields = new List<StructField>();
+            string currentGuard = null;
+
+            foreach (string decl in declarations)
             {
-                additionalFields = new[] { $"float3 {resolvedName} : NORMAL;" };
+                string trimmed = decl.Trim();
+                if (string.IsNullOrEmpty(trimmed)) continue;
+
+                if (trimmed.StartsWith("#endif"))
+                {
+                    currentGuard = null;
+                    continue;
+                }
+
+                if (trimmed.StartsWith("#"))
+                {
+                    currentGuard = trimmed;
+                    continue;
+                }
+
+                var match = System.Text.RegularExpressions.Regex.Match(trimmed,
+                    @"^(\w+)\s+(\w+)\s*:\s*(\w+)\s*;?$");
+                if (match.Success)
+                {
+                    fields.Add(new StructField
+                    {
+                        Type = match.Groups[1].Value,
+                        Name = match.Groups[2].Value,
+                        Semantic = match.Groups[3].Value,
+                        PreprocessorGuard = currentGuard,
+                        RawLine = trimmed
+                    });
+                }
             }
-            
-            return GenerateInterpolatorsStruct(ctx, "DepthNormalsInterpolators", additionalFields);
+
+            return fields;
         }
     }
 }

@@ -154,9 +154,9 @@ TessFactors PatchConstant(InputPatch<TessControlPoint, 3> patch)
     
     UNITY_SETUP_INSTANCE_ID(patch[0]);
     
-    float3 p0 = TransformObjectToWorld(patch[0].positionOS.xyz);
-    float3 p1 = TransformObjectToWorld(patch[1].positionOS.xyz);
-    float3 p2 = TransformObjectToWorld(patch[2].positionOS.xyz);
+    float3 p0 = TransformObjectToWorld(patch[0].{{POSITION}}.xyz);
+    float3 p1 = TransformObjectToWorld(patch[1].{{POSITION}}.xyz);
+    float3 p2 = TransformObjectToWorld(patch[2].{{POSITION}}.xyz);
     
     #ifdef TESS_FRUSTUM_CULL
         if (FrustumCull(p0, p1, p2))
@@ -197,9 +197,9 @@ TessFactors PatchConstant(InputPatch<TessControlPoint, 3> patch)
     #endif
     
     #ifdef TESS_PHONG
-        f.n0 = TransformObjectToWorldNormal(patch[0].normalOS);
-        f.n1 = TransformObjectToWorldNormal(patch[1].normalOS);
-        f.n2 = TransformObjectToWorldNormal(patch[2].normalOS);
+        f.n0 = TransformObjectToWorldNormal(patch[0].{{NORMAL}});
+        f.n1 = TransformObjectToWorldNormal(patch[1].{{NORMAL}});
+        f.n2 = TransformObjectToWorldNormal(patch[2].{{NORMAL}});
     #endif
     
     #ifdef FS_TESSELLATION_FACTOR_OVERRIDE
@@ -234,20 +234,20 @@ TessControlPoint Hull(InputPatch<TessControlPoint, 3> patch, uint id : SV_Output
 {{DOMAIN_INTERPOLATION}}
     
     #ifdef TESS_PHONG
-        float3 posWS = TransformObjectToWorld(input.positionOS.xyz);
-        
-        float3 cp0 = TransformObjectToWorld(patch[0].positionOS.xyz);
-        float3 cp1 = TransformObjectToWorld(patch[1].positionOS.xyz);
-        float3 cp2 = TransformObjectToWorld(patch[2].positionOS.xyz);
-        
+        float3 posWS = TransformObjectToWorld(input.{{POSITION}}.xyz);
+
+        float3 cp0 = TransformObjectToWorld(patch[0].{{POSITION}}.xyz);
+        float3 cp1 = TransformObjectToWorld(patch[1].{{POSITION}}.xyz);
+        float3 cp2 = TransformObjectToWorld(patch[2].{{POSITION}}.xyz);
+
         float3 proj0 = posWS - dot(posWS - cp0, factors.n0) * factors.n0;
         float3 proj1 = posWS - dot(posWS - cp1, factors.n1) * factors.n1;
         float3 proj2 = posWS - dot(posWS - cp2, factors.n2) * factors.n2;
-        
+
         float3 phongPos = proj0 * bary.x + proj1 * bary.y + proj2 * bary.z;
         posWS = lerp(posWS, phongPos, _PhongStrength);
-        
-        input.positionOS = float4(TransformWorldToObject(posWS), 1);
+
+        input.{{POSITION}} = float4(TransformWorldToObject(posWS), 1);
     #endif
     
     return {{VERTEX_FUNCTION}}(input);

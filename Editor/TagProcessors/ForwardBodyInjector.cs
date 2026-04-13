@@ -64,13 +64,13 @@ namespace FS.Shaders.Editor
         /// </summary>
         static string BuildVertexBody(ShaderContext ctx, string passName)
         {
-            string source = ctx.ReferencePass?.HlslProgram;
+            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram);
             string funcName = ctx.ReferenceVertexFunctionName;
             
             // Detect user's variable names before extraction
-            string userInputName = DetectParameterName(source, funcName) ?? "input";
+            string userInputName = DetectParameterName(searchSource, funcName) ?? "input";
             
-            string body = ExtractFunctionBody(source, funcName);
+            string body = ExtractFunctionBody(searchSource, funcName);
             if (body == null) return null;
             
             // Detect output variable name from struct init: Interpolators xxx = (Interpolators)0;
@@ -158,14 +158,14 @@ namespace FS.Shaders.Editor
             string expression = ResolveReturnExpression(injector, ctx, outputMap);
             if (expression == null) return null;
             
-            string source = ctx.ReferencePass?.HlslProgram;
+            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram);
             string funcName = ctx.ReferenceFragmentFunctionName;
             
             // Detect user's parameter name before extraction
-            string userInputName = DetectParameterName(source, funcName) ?? "input";
+            string userInputName = DetectParameterName(searchSource, funcName) ?? "input";
             
             // Extract fragment body
-            string body = ExtractFunctionBody(source, funcName);
+            string body = ExtractFunctionBody(searchSource, funcName);
             if (body == null) return null;
             
             // Normalize input variable name to match templates.
@@ -372,8 +372,8 @@ namespace FS.Shaders.Editor
             if (ctx.ReferencePass == null)
                 return new Dictionary<string, string>();
 
-            string source = (ctx.HlslIncludeBlock ?? "") + "\n" + (ctx.ReferencePass.HlslProgram ?? "");
-            return ShaderPragmaUtility.ParseFragmentOutputs(source);
+            return ShaderPragmaUtility.ParseFragmentOutputs(
+                ctx.BuildSearchSource(ctx.ReferencePass.HlslProgram));
         }
         
         //=============================================================================
@@ -396,7 +396,9 @@ namespace FS.Shaders.Editor
         /// </summary>
         public static string ExtractForwardVertexBody(ShaderContext ctx)
         {
-            return ExtractFunctionBody(ctx.ReferencePass?.HlslProgram, ctx.ReferenceVertexFunctionName);
+            return ExtractFunctionBody(
+                ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram),
+                ctx.ReferenceVertexFunctionName);
         }
     }
 }
