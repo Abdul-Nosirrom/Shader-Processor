@@ -31,38 +31,28 @@ namespace FS.Shaders.Editor
         
         static string FindTemplatesPath()
         {
+            // Locate the Templates folder relative to this script, wherever the
+            // package lives. Sibling first (Generation/Templates), then parent
+            // (Editor/Templates, the actual layout).
             var guids = AssetDatabase.FindAssets("t:Script TemplateEngine");
-            
+
             foreach (var guid in guids)
             {
                 string scriptPath = AssetDatabase.GUIDToAssetPath(guid);
                 string dir = Path.GetDirectoryName(scriptPath);
-                
+
                 string templatesPath = Path.Combine(dir, "Templates");
                 if (AssetDatabase.IsValidFolder(templatesPath))
                     return templatesPath;
-                
+
                 string parentDir = Path.GetDirectoryName(dir);
                 templatesPath = Path.Combine(parentDir, "Templates");
                 if (AssetDatabase.IsValidFolder(templatesPath))
                     return templatesPath;
             }
-            
-            var fallbackPaths = new[]
-            {
-                "Assets/Editor/ShaderProcessing/Templates",
-                "Assets/FreeSkies/Editor/ShaderProcessing/Templates",
-                "Assets/Scripts/Editor/ShaderProcessing/Templates"
-            };
-            
-            foreach (var path in fallbackPaths)
-            {
-                if (AssetDatabase.IsValidFolder(path))
-                    return path;
-            }
-            
-            Debug.LogWarning("[ShaderProcessor] Could not find Templates folder. Using default path.");
-            return "Assets/Editor/ShaderProcessing/Templates";
+
+            Debug.LogError("[ShaderProcessor] Could not find Templates folder next to the TemplateEngine script.");
+            return null;
         }
         
         //=============================================================================
@@ -73,18 +63,40 @@ namespace FS.Shaders.Editor
         {
             if (s_TemplateCache.TryGetValue(templateName, out string cached))
                 return cached;
-            
+
+            if (string.IsNullOrEmpty(TemplatesPath))
+                return null; // FindTemplatesPath already logged the error
+
             string path = Path.Combine(TemplatesPath, templateName + ".hlsl");
-            
+
             if (!File.Exists(path))
             {
                 Debug.LogError($"[ShaderProcessor] Template not found: {path}");
                 return null;
             }
-            
+
             string content = File.ReadAllText(path);
             s_TemplateCache[templateName] = content;
             return content;
+        }
+
+        /// <summary>
+        /// Asset paths of all template files. The importer registers these as
+        /// dependencies so shaders reimport when a template changes - template
+        /// content isn't part of the source hash, so without explicit dependencies
+        /// the import cache serves stale results after a template edit.
+        /// </summary>
+        public static IEnumerable<string> GetTemplatePaths()
+        {
+            string templatesPath = TemplatesPath;
+            if (string.IsNullOrEmpty(templatesPath) || !Directory.Exists(templatesPath))
+                yield break;
+
+            foreach (string file in Directory.GetFiles(templatesPath, "*.hlsl"))
+            {
+                // DependsOnSourceAsset wants forward-slash project-relative paths
+                yield return file.Replace('\\', '/');
+            }
         }
         
         public static void ClearCache()
@@ -128,8 +140,10 @@ namespace FS.Shaders.Editor
                 result = result.Replace("{{" + kvp.Key + "}}", kvp.Value ?? "");
             }
             
-            // Remove any unreplaced markers
-            result = Regex.Replace(result, @"\{\{[^}]+\}\}", "");
+            // Remove any unreplaced markers. Only the marker shape (an uppercase name) is
+            // stripped: replacement values carry user code, and a looser pattern ate
+            // brace initializers like {{1,2}} along with the markers.
+            result = Regex.Replace(result, @"\{\{[A-Z][A-Z0-9_]*\}\}", "");
             
             return result;
         }
@@ -158,10 +172,17 @@ namespace FS.Shaders.Editor
             
             // Forward pass content, split into preprocessor and code.
             // Preprocessor (includes, defines, pragmas) goes above CBUFFER so macros
-            // used in CBUFFER/structs are defined. Code (helper functions) goes below
-            // CBUFFER/textures/structs since it references those declarations.
+            // used in CBUFFER/structs are defined. Code (texture declarations, helper
+            // functions) goes below CBUFFER/structs since it references those declarations.
             var forwardContent = HookProcessor.ExtractForwardPassContentSplit(ctx, attrName, interpName);
-            replacements["FORWARD_PREPROCESSOR"] = forwardContent.Preprocessor;
+            var injector = ShaderPassInjectorRegistry.GetByName(passName);
+
+            // The pass defines lead the copied block because Unity's pragma scanner only
+            // honors a #define that comes before the pragma it gates. Putting them here
+            // rather than in each template means every pass that copies the forward
+            // pragmas gets them, including custom passes, without touching its template.
+            replacements["FORWARD_PREPROCESSOR"] = GeneratePassDefines(passName, injector)
+                + forwardContent.Preprocessor;
             replacements["FORWARD_CONTENT"] = forwardContent.Content;
             
             // CBUFFER (only if not in HLSLINCLUDE)
@@ -172,16 +193,6 @@ namespace FS.Shaders.Editor
             else
             {
                 replacements["CBUFFER"] = "";
-            }
-            
-            // Textures (only if not in HLSLINCLUDE)
-            if (!ctx.TexturesInHlslInclude)
-            {
-                replacements["TEXTURES"] = GenerateTextures(ctx);
-            }
-            else
-            {
-                replacements["TEXTURES"] = "";
             }
             
             // Hook functions with rewritten struct names and prefixed function names
@@ -201,6 +212,14 @@ namespace FS.Shaders.Editor
             
             // Extra fragment parameters (SV_IsFrontFace, etc.) from reference pass
             replacements["EXTRA_FRAG_PARAMS"] = ctx.ExtraFragmentParams ?? "";
+
+            // Cull like the reference pass. When it has no Cull line, emit none either:
+            // the generated pass then inherits the SubShader's Cull (or Unity's default
+            // Back), the same as the reference pass. Hard-coding a mode here would
+            // back-cull depth and shadows for double-sided shaders. Templates whose
+            // culling is part of the technique (Meta, Outline) don't use this marker.
+            string cullState = ctx.ReferencePass?.CullState;
+            replacements["CULL"] = string.IsNullOrEmpty(cullState) ? "" : $"Cull {cullState}";
             
             // Empty defaults for tag processor markers
             replacements["TESSELLATION_PRAGMAS"] = "";
@@ -208,7 +227,6 @@ namespace FS.Shaders.Editor
 
             // Resolve the pass-specific Attributes struct so tag processors can see
             // any fields the pass injector adds (e.g., NORMAL for ShadowCaster).
-            var injector = ShaderPassInjectorRegistry.GetByName(passName);
             ctx.CurrentPassAttributes = ResolvePassAttributes(ctx, injector);
 
             // Let tag processors contribute replacements
@@ -340,9 +358,53 @@ namespace FS.Shaders.Editor
         }
 
         //=============================================================================
+        // Pass Defines
+        //=============================================================================
+
+        /// <summary>Defined in every generated pass, never in the forward pass.</summary>
+        public const string GENERATED_PASS_DEFINE = "SHADERGEN_GENERATED_PASS";
+
+        /// <summary>Defined in generated passes whose injector is a base pass (the [InjectBasePasses] set).</summary>
+        public const string BASE_PASSES_DEFINE = "SHADERGEN_BASE_PASSES";
+
+        /// <summary>Prefix of the per-pass define, e.g. SHADERGEN_PASS_SHADOWCASTER.</summary>
+        public const string PASS_DEFINE_PREFIX = "SHADERGEN_PASS_";
+
+        /// <summary>
+        /// Per-pass define for a pass name: the name uppercased, with anything that
+        /// isn't a letter or digit turned into '_'. "MotionVectors" gives
+        /// SHADERGEN_PASS_MOTIONVECTORS.
+        /// </summary>
+        public static string GetPassDefine(string passName)
+        {
+            var sb = new System.Text.StringBuilder(PASS_DEFINE_PREFIX);
+            foreach (char c in passName)
+            {
+                sb.Append(char.IsLetterOrDigit(c) ? char.ToUpperInvariant(c) : '_');
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// The defines a generated pass emits so forward-pass pragmas and code can gate
+        /// on where they compile. The forward pass has none of them, so
+        /// "#if !defined(SHADERGEN_GENERATED_PASS)" means forward only. See the README
+        /// section "Keyword Pragmas and Pass Defines".
+        /// </summary>
+        static string GeneratePassDefines(string passName, ShaderPassInjector injector)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"#define {GENERATED_PASS_DEFINE}");
+            if (injector != null && injector.IsBasePass)
+                sb.AppendLine($"#define {BASE_PASSES_DEFINE}");
+            sb.AppendLine($"#define {GetPassDefine(passName)}");
+            return sb.ToString();
+        }
+
+        //=============================================================================
         // Code Generation
         //=============================================================================
-        
+
         static string GenerateCBuffer(ShaderContext ctx)
         {
             // Combine parsed CBUFFER content with processor additions
@@ -363,22 +425,6 @@ namespace FS.Shaders.Editor
             return $@"CBUFFER_START(UnityPerMaterial)
 {sb.ToString().TrimEnd()}
 CBUFFER_END";
-        }
-        
-        static string GenerateTextures(ShaderContext ctx)
-        {
-            if (ctx.Textures.Count == 0) return "";
-            
-            var sb = new System.Text.StringBuilder();
-            var added = new HashSet<string>();
-            
-            foreach (var tex in ctx.Textures)
-            {
-                if (added.Add(tex.Name))
-                    sb.AppendLine(tex.RawDeclaration);
-            }
-            
-            return sb.ToString();
         }
         
         static string GenerateHookDefines(ShaderContext ctx)

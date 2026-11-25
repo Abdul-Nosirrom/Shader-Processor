@@ -2,68 +2,99 @@
 
 // =============================================================================
 // LIGHT_LOOP.HLSL
-// Abstracts Forward vs Forward+ light iteration.
+// One loop over every realtime light that reaches a pixel, so lighting code is
+// written once instead of "main light, then additional lights".
 //
 // Usage:
-//   LIGHT_LOOP_BEGIN(positionWS, positionCS)
-//       Light light = LIGHT_LOOP_GET_LIGHT(positionWS);
-//       color += YourLightingFunction(light, ...);
-//   LIGHT_LOOP_END
+//   ALL_LIGHTS_LOOP_BEGIN(positionWS, positionCS, shadowCoord, shadowMask)
+//       color += YourLightingFunction(light, ...);   // `light` and `isMainLight` are in scope
+//   ALL_LIGHTS_LOOP_END
+//
+// Pass half4(1, 1, 1, 1) as shadowMask if the shader doesn't sample one.
 // =============================================================================
 
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 #include "Keywords/LightingKeywords.hlsl"
-// we overridin these
-#undef LIGHT_LOOP_BEGIN
-#undef LIGHT_LOOP_END
 
 // -----------------------------------------------------------------------------
-// Main Light Helper
+// Additional light iteration
 // -----------------------------------------------------------------------------
+// FS_ADDITIONAL_LIGHTS_INIT declares the iteration state. FS_ADDITIONAL_LIGHTS_NEXT
+// writes the next additional light index, or breaks out of the enclosing loop when
+// there are none left.
 
-Light GetMainLightData(float3 positionWS, float4 shadowCoord)
-{
-    Light light = GetMainLight(shadowCoord);
-    return light;
-}
+#if defined(_CLUSTER_LIGHT_LOOP)
+    // Forward+ keeps additional directional lights out of the cluster. They sit at indices
+    // [0, URP_FP_DIRECTIONAL_LIGHTS_COUNT) and URP lights them in a separate loop before it
+    // walks the cluster (UniversalFragmentPBR in URP Lighting.hlsl). Cluster indices start
+    // after them.
+    #define FS_ADDITIONAL_LIGHTS_INIT(positionWS, positionCS) \
+        uint _directionalLightCount = min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); \
+        uint _nextDirectionalLight = 0u; \
+        ClusterIterator _clusterIterator = ClusterInit(GetNormalizedScreenSpaceUV(positionCS), positionWS, 0);
 
-// -----------------------------------------------------------------------------
-// Additional Lights Loop Macros
-// -----------------------------------------------------------------------------
+    #define FS_ADDITIONAL_LIGHTS_NEXT(lightIndex) \
+        if (_nextDirectionalLight < _directionalLightCount) { lightIndex = _nextDirectionalLight++; } \
+        else if (ClusterNext(_clusterIterator, lightIndex)) { lightIndex += URP_FP_DIRECTIONAL_LIGHTS_COUNT; } \
+        else { break; }
 
-#if defined(_ADDITIONAL_LIGHTS)
+#elif defined(_ADDITIONAL_LIGHTS)
+    // Forward: per-object light list
+    #define FS_ADDITIONAL_LIGHTS_INIT(positionWS, positionCS) \
+        uint _additionalLightCount = GetAdditionalLightsCount(); \
+        uint _nextAdditionalLight = 0u;
 
-    #if defined(_CLUSTER_LIGHT_LOOP)
-        // Forward+ (Clustered)
-        #define LIGHT_LOOP_BEGIN(positionWS, positionCS) \
-            { \
-                uint _lightIdx; \
-                ClusterIterator _iter = ClusterInit(GetNormalizedScreenSpaceUV(positionCS), positionWS, 0); \
-                [loop] while (ClusterNext(_iter, _lightIdx)) { \
-                    _lightIdx += URP_FP_DIRECTIONAL_LIGHTS_COUNT;
-
-        #define LIGHT_LOOP_GET_LIGHT(positionWS) GetAdditionalLight(_lightIdx, positionWS)
-        #define LIGHT_LOOP_GET_LIGHT_SHADOW(positionWS, shadowMask) GetAdditionalLight(_lightIdx, positionWS, shadowMask)
-        #define LIGHT_LOOP_END } }
-    #else
-        // Standard Forward
-        #define LIGHT_LOOP_BEGIN(positionWS, positionCS) \
-            { \
-                uint _lightCount = GetAdditionalLightsCount(); \
-                for (uint _lightIdx = 0u; _lightIdx < _lightCount; ++_lightIdx) {
-
-        #define LIGHT_LOOP_GET_LIGHT(positionWS) GetAdditionalLight(_lightIdx, positionWS)
-        #define LIGHT_LOOP_GET_LIGHT_SHADOW(positionWS, shadowMask) GetAdditionalLight(_lightIdx, positionWS, shadowMask)
-        #define LIGHT_LOOP_END } }
-    #endif
+    #define FS_ADDITIONAL_LIGHTS_NEXT(lightIndex) \
+        if (_nextAdditionalLight < _additionalLightCount) { lightIndex = _nextAdditionalLight++; } \
+        else { break; }
 
 #else
-    // No additional lights
-    #define LIGHT_LOOP_BEGIN(positionWS, positionCS) { if (false) {
-    #define LIGHT_LOOP_GET_LIGHT(positionWS) (Light)0
-    #define LIGHT_LOOP_GET_LIGHT_SHADOW(positionWS, shadowMask) (Light)0
-    #define LIGHT_LOOP_END } }
+    // No per-pixel additional lights (off, or per-vertex through DoVertexLighting)
+    #define FS_ADDITIONAL_LIGHTS_INIT(positionWS, positionCS)
+    #define FS_ADDITIONAL_LIGHTS_NEXT(lightIndex) { break; }
 #endif
+
+#if defined(_CLUSTER_LIGHT_LOOP) && defined(LIGHTMAP_ON) && defined(LIGHTMAP_SHADOW_MIXING)
+    // Same as URP's CLUSTER_LIGHT_LOOP_SUBTRACTIVE_LIGHT_CHECK (RealtimeLights.hlsl): with
+    // subtractive mixed lighting, lights already baked into the lightmap are flagged in the
+    // colour alpha and would be counted twice
+    #define FS_SKIP_BAKED_SUBTRACTIVE_LIGHT(lightIndex) if (_AdditionalLightsColor[lightIndex].a > 0.0h) { continue; }
+#else
+    #define FS_SKIP_BAKED_SUBTRACTIVE_LIGHT(lightIndex)
+#endif
+
+// -----------------------------------------------------------------------------
+// All Lights Loop
+// -----------------------------------------------------------------------------
+// Lights come in URP's order: the main light, then the additional lights. The main light
+// uses URP's 3-arg GetMainLight, which adds the shadow-distance fade, baked shadowmask mixing
+// and the main light cookie on top of the realtime shadow.
+//
+// These names are our own rather than URP's LIGHT_LOOP_BEGIN/END (RealtimeLights.hlsl), so
+// including this file after Lighting.hlsl doesn't redefine URP's macros.
+
+#define ALL_LIGHTS_LOOP_BEGIN(positionWS, positionCS, shadowCoord, shadowMask) \
+    { \
+        FS_ADDITIONAL_LIGHTS_INIT(positionWS, positionCS) \
+        bool _mainLightDone = false; \
+        [loop] while (true) \
+        { \
+            Light light = (Light)0; \
+            bool isMainLight = !_mainLightDone; \
+            if (isMainLight) \
+            { \
+                _mainLightDone = true; \
+                light = GetMainLight(shadowCoord, positionWS, shadowMask); \
+            } \
+            else \
+            { \
+                uint _lightIndex = 0u; \
+                FS_ADDITIONAL_LIGHTS_NEXT(_lightIndex) \
+                FS_SKIP_BAKED_SUBTRACTIVE_LIGHT(_lightIndex) \
+                light = GetAdditionalLight(_lightIndex, positionWS, shadowMask); \
+            }
+
+#define ALL_LIGHTS_LOOP_END } }
 
 // -----------------------------------------------------------------------------
 // Vertex Lighting (Low-end / Mobile)
@@ -72,7 +103,7 @@ Light GetMainLightData(float3 positionWS, float4 shadowCoord)
 half3 DoVertexLighting(float3 positionWS, half3 normalWS)
 {
     half3 vertexLight = half3(0, 0, 0);
-    
+
     #if defined(_ADDITIONAL_LIGHTS_VERTEX)
         uint lightCount = GetAdditionalLightsCount();
         for (uint i = 0u; i < lightCount; ++i)
@@ -81,6 +112,6 @@ half3 DoVertexLighting(float3 positionWS, half3 normalWS)
             vertexLight += light.color * light.distanceAttenuation * saturate(dot(normalWS, light.direction));
         }
     #endif
-    
+
     return vertexLight;
 }

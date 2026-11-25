@@ -8,19 +8,24 @@ Pass
     ZWrite On
     ZTest LEqual
     ColorMask 0
-    Cull Back
+    {{CULL}}
 
     HLSLPROGRAM
     #pragma target 4.5
     {{TESSELLATION_PRAGMAS}}
     {{VERTEX_PRAGMA}}
     #pragma fragment ShadowCasterFragment
-    
-    #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
-    
+
+    // The pass owns its pipeline keywords (punctual shadow, LOD crossfade, instancing).
+    // The forward lighting keywords gate themselves out on SHADERGEN_GENERATED_PASS.
+    #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/ShadowCasterKeywords.hlsl"
+
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
-    
+    #if defined(LOD_FADE_CROSSFADE)
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+    #endif
+
     // -------------------------------------------------------------------------
     // Preprocessor from MainPass (includes, defines, keywords)
     // -------------------------------------------------------------------------
@@ -30,7 +35,6 @@ Pass
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
-    {{TEXTURES}}
     
     // Shadow-specific uniforms
     float3 _LightDirection;
@@ -80,7 +84,10 @@ Pass
             float3 lightDirectionWS = _LightDirection;
         #endif
         
-        output.{{SV_POSITION}} = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirectionWS));
+        // Same as URP's ShadowCasterPass: clamping pulls casters behind the near plane
+        // onto it (directional lights only) so they aren't clipped out of the shadow map
+        float4 shadowPositionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirectionWS));
+        output.{{SV_POSITION}} = ApplyShadowClamping(shadowPositionCS);
         
         // Hook: transfer extra interpolators
         {{INTERPOLATOR_TRANSFER_CALL}}
@@ -105,7 +112,12 @@ Pass
         {
             // Hook: alpha clipping
             {{ALPHA_CLIP_CALL}}
-            
+
+            // LOD crossfade, after alpha clip like URP's ShadowCasterPass
+            #ifdef LOD_FADE_CROSSFADE
+                LODFadeCrossFade(input.{{SV_POSITION}});
+            #endif
+
             return 0;
         }
     }

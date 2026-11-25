@@ -229,7 +229,7 @@ namespace FS.Shaders.Editor
             EditorGUILayout.LabelField("Adding a New Tag Processor", _subHeaderStyle);
             EditorGUILayout.LabelField(
                 "1. Create a class inheriting ShaderTagProcessorBase\n" +
-                "2. Add [ShaderTagProcessor(\"TagName\", priority: N)] attribute\n" +
+                "2. Add the [ShaderTagProcessor] attribute and override TagName (and Priority if needed)\n" +
                 "3. Override desired stages: GetPropertiesEntries, GetCBufferEntries,\n" +
                 "   ModifyPass, GetPassReplacements\n" +
                 "4. Enable in shader: Tags { \"TagName\" = \"On\" }",
@@ -313,6 +313,7 @@ namespace FS.Shaders.Editor
             DrawField("Marker", $"[InjectPass:{pass.PassName}]");
             DrawField("Template", $"Templates/{pass.TemplateName}.hlsl");
             DrawField("Base Pass", pass.IsBasePass ? "Yes" : "No");
+            DrawField("Pass Define", TemplateEngine.GetPassDefine(pass.PassName));
             DrawField("Type", pass.GetType().Name);
             
             // Show capabilities

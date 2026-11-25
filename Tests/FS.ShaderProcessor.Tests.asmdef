@@ -2,7 +2,8 @@
     "name": "FS.ShaderProcessor.Tests",
     "rootNamespace": "FS.Shaders.Editor.Tests",
     "references": [
-        "FS.ShaderProcessor.Editor"
+        "FS.ShaderProcessor.Editor",
+        "UnityEngine.TestRunner"
     ],
     "includePlatforms": [
         "Editor"

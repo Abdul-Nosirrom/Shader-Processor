@@ -7,16 +7,23 @@ Pass
     Tags { "LightMode" = "DepthOnly" }
     ZWrite On
     ColorMask R
-    Cull Back
+    {{CULL}}
 
     HLSLPROGRAM
     #pragma target 4.5
     {{TESSELLATION_PRAGMAS}}
     {{VERTEX_PRAGMA}}
     #pragma fragment DepthOnlyFragment
-    
+
+    // The pass owns its pipeline keywords (LOD crossfade, instancing).
+    // The forward lighting keywords gate themselves out on SHADERGEN_GENERATED_PASS.
+    #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/DepthOnlyKeywords.hlsl"
+
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-    
+    #if defined(LOD_FADE_CROSSFADE)
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+    #endif
+
     // -------------------------------------------------------------------------
     // Preprocessor from MainPass (includes, defines, keywords)
     // -------------------------------------------------------------------------
@@ -26,7 +33,6 @@ Pass
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
-    {{TEXTURES}}
     
     // -------------------------------------------------------------------------
     // Structs
@@ -87,7 +93,12 @@ Pass
         {
             // Hook: alpha clipping
             {{ALPHA_CLIP_CALL}}
-            
+
+            // LOD crossfade, after alpha clip like URP's DepthOnlyPass
+            #ifdef LOD_FADE_CROSSFADE
+                LODFadeCrossFade(input.{{SV_POSITION}});
+            #endif
+
             return input.{{SV_POSITION}}.z;
         }
     }

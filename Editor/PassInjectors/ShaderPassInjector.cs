@@ -118,6 +118,11 @@ namespace FS.Shaders.Editor
         ///   {{SV_POSITION}}, {{NORMAL_WS}}     - struct field names by semantic
         ///   {{output:albedo}}, {{output:normal}} - variable names from #pragma fragmentOutput
         ///
+        /// IMPORTANT: multi-statement expressions must be wrapped in braces ({ ... }).
+        /// The expression substitutes for a single 'return X;' statement, which may be
+        /// the body of a braceless if - unbraced multi-statement replacements change
+        /// control flow there. See MetaPass/MotionVectorsPass for the pattern.
+        ///
         /// Return null to skip fragment injection for this pass entirely.
         /// </summary>
         /// <param name="ctx">The shader context.</param>

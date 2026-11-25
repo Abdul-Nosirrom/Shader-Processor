@@ -3,8 +3,12 @@
 // =============================================================================
 // BAKED_GI_KEYWORDS.HLSL
 // Keywords for baked lighting: lightmaps, light probes, mixed lighting.
-// Use: #include_with_pragmas "Library/Keywords/BakedGIKeywords.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/BakedGIKeywords.hlsl"
 // =============================================================================
+
+// Forward pass only. ShaderGen's generated passes define SHADERGEN_GENERATED_PASS
+// and declare their own keyword set, see ForwardKeywords.hlsl.
+#ifndef SHADERGEN_GENERATED_PASS
 
 // -----------------------------------------------------------------------------
 // Lightmaps
@@ -49,3 +53,5 @@
 // -----------------------------------------------------------------------------
 // Uncomment if using Adaptive Probe Volumes
 // #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
+
+#endif // SHADERGEN_GENERATED_PASS

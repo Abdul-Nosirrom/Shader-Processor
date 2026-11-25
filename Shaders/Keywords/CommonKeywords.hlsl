@@ -2,9 +2,13 @@
 
 // =============================================================================
 // COMMON_KEYWORDS.HLSL
-// Keywords needed by most/all passes: fog, LOD, debug.
-// Use: #include_with_pragmas "Library/Keywords/CommonKeywords.hlsl"
+// Forward pass keywords: target, LOD, fog, debug.
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/CommonKeywords.hlsl"
 // =============================================================================
+
+// Forward pass only. ShaderGen's generated passes define SHADERGEN_GENERATED_PASS
+// and declare their own keyword set, see ForwardKeywords.hlsl.
+#ifndef SHADERGEN_GENERATED_PASS
 
 // -----------------------------------------------------------------------------
 // Shader Target
@@ -28,3 +32,5 @@
 // -----------------------------------------------------------------------------
 // Rendering Debugger support (material views, overdraw, etc.)
 #pragma multi_compile_fragment _ DEBUG_DISPLAY
+
+#endif // SHADERGEN_GENERATED_PASS

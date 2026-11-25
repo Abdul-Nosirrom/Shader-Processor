@@ -27,7 +27,7 @@ namespace FS.Shaders.Editor
             };
             
             // Stage 1: Parse
-            // Extracts structs, CBUFFER, textures, hooks, passes, and forward pass reference.
+            // Extracts structs, CBUFFER, hooks, passes, and forward pass reference.
             ShaderParser.Parse(ctx);
             
             // Stage 2: Collect material data from pass injectors
@@ -72,6 +72,11 @@ namespace FS.Shaders.Editor
                 Debug.LogWarning($"[ShaderProcessor] No reference pass found in {ctx.ShaderPath}. Pass generation skipped.");
             }
             
+            // Stage 7a: Blank the fragmentOutput pragmas left in the authored passes.
+            // ForwardBodyInjector has read them by now, the generated passes never had
+            // them, and Unity warns about the unknown pragma in the pass you wrote.
+            ctx.ProcessedSource = ShaderPragmaUtility.BlankFragmentOutputs(ctx.ProcessedSource);
+
             // Stage 7: Strip remaining InheritHook markers
             // Parent shaders declare {{InheritHook:Name(...)}} points that child shaders
             // fill via inheritance. When the parent compiles standalone (no child), these

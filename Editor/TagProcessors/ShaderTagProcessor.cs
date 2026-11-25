@@ -44,20 +44,12 @@ namespace FS.Shaders.Editor
     }
     
     /// <summary>
-    /// Attribute to mark a class as a shader tag processor.
+    /// Attribute to mark a class as a shader tag processor for TypeCache discovery.
+    /// Tag name and priority come from the IShaderTagProcessor implementation itself -
+    /// the attribute is a pure marker so there's a single source of truth.
     /// </summary>
     [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-    public class ShaderTagProcessorAttribute : Attribute
-    {
-        public string TagName { get; }
-        public int Priority { get; }
-        
-        public ShaderTagProcessorAttribute(string tagName, int priority = 100)
-        {
-            TagName = tagName;
-            Priority = priority;
-        }
-    }
+    public class ShaderTagProcessorAttribute : Attribute { }
     
     /// <summary>
     /// Base class for shader tag processors with default empty implementations.
@@ -122,8 +114,8 @@ namespace FS.Shaders.Editor
             // Sort by priority
             s_SortedProcessors = s_SortedProcessors.OrderBy(p => p.Priority).ToList();
             s_Initialized = true;
-            
-            Debug.Log($"[ShaderProcessor] Initialized {s_SortedProcessors.Count} tag processors");
+
+            ShaderGenLog.Info($"[ShaderProcessor] Initialized {s_SortedProcessors.Count} tag processors");
         }
         
         public static void RegisterProcessor(IShaderTagProcessor processor)

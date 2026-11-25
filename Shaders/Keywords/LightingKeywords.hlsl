@@ -3,8 +3,12 @@
 // =============================================================================
 // LIGHTING_KEYWORDS.HLSL
 // All keywords related to realtime lighting, shadows, and light features.
-// Use: #include_with_pragmas "Library/Keywords/LightingKeywords.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/LightingKeywords.hlsl"
 // =============================================================================
+
+// Forward pass only. ShaderGen's generated passes define SHADERGEN_GENERATED_PASS
+// and declare their own keyword set, see ForwardKeywords.hlsl.
+#ifndef SHADERGEN_GENERATED_PASS
 
 // -----------------------------------------------------------------------------
 // Main Light Shadows
@@ -20,13 +24,13 @@
 #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
 
 // Shadows from point/spot lights
-#pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
+#pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
 
 // -----------------------------------------------------------------------------
 // Shadow Quality
 // -----------------------------------------------------------------------------
 // Soft shadow filtering quality levels
-#pragma multi_compile _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
+#pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
 
 // -----------------------------------------------------------------------------
 // Forward+ (Clustered Lighting)
@@ -38,7 +42,7 @@
 // Light Features
 // -----------------------------------------------------------------------------
 // Cookie textures on lights
-#pragma multi_compile _ _LIGHT_COOKIES
+#pragma multi_compile_fragment _ _LIGHT_COOKIES
 
 // Per-light layer masking
 #pragma multi_compile _ _LIGHT_LAYERS
@@ -63,3 +67,5 @@
 
 // Probe atlas optimization (Unity 6+)
 // #pragma multi_compile_fragment _ _REFLECTION_PROBE_ATLAS
+
+#endif // SHADERGEN_GENERATED_PASS

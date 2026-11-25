@@ -37,7 +37,14 @@ namespace FS.Shaders.Editor
         /// Null if no includes were resolved (in which case HlslIncludeBlock is used directly).
         /// </summary>
         public string ResolvedHlslInclude;
-        
+
+        /// <summary>
+        /// Full paths of the files inlined into <see cref="ResolvedHlslInclude"/>.
+        /// Pass include resolution starts from a copy of this set, so a file the
+        /// HLSLINCLUDE already pulled in isn't inlined a second time for a pass.
+        /// </summary>
+        public HashSet<string> HlslIncludeResolvedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>
         /// Build a combined search source for parsing operations. Combines the resolved
         /// HLSLINCLUDE with a pass's HLSL program content. Most parsing operations
@@ -51,6 +58,17 @@ namespace FS.Shaders.Editor
                 return hlsl + "\n" + passHlsl;
             return hlsl;
         }
+
+        /// <summary>
+        /// Search source for a pass: the resolved HLSLINCLUDE plus the pass's program
+        /// with its own #includes inlined, so structs, functions and hooks the pass
+        /// gets from an included file can be found. Falls back to the raw program if
+        /// the pass hasn't been resolved, and to the HLSLINCLUDE alone if pass is null.
+        /// </summary>
+        public string BuildSearchSource(PassInfo pass)
+        {
+            return BuildSearchSource(pass?.ResolvedHlslProgram ?? pass?.HlslProgram);
+        }
         
         /// <summary>Content of Properties block (without Properties { }).</summary>
         public string PropertiesBlock;
@@ -58,8 +76,11 @@ namespace FS.Shaders.Editor
         /// <summary>Content inside CBUFFER_START/CBUFFER_END.</summary>
         public string CBufferContent;
         
-        /// <summary>All SubShader tags.</summary>
-        public Dictionary<string, string> SubShaderTags = new Dictionary<string, string>();
+        /// <summary>
+        /// All SubShader tags. Case-insensitive like pass tags: the importer's activation
+        /// check ignores case, so a lowercase "shadergen" tag must also be seen here.
+        /// </summary>
+        public Dictionary<string, string> SubShaderTags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         
         //=============================================================================
         // Location Flags - Where things are defined
@@ -68,7 +89,11 @@ namespace FS.Shaders.Editor
         /// <summary>True if CBUFFER is in HLSLINCLUDE (shared), false if in Forward pass.</summary>
         public bool CBufferInHlslInclude;
         
-        /// <summary>True if textures are in HLSLINCLUDE (shared).</summary>
+        /// <summary>
+        /// True if HLSLINCLUDE declares textures. Informational only (the importer
+        /// inspector shows it): texture declarations reach generated passes from
+        /// wherever they're written, so nothing branches on this.
+        /// </summary>
         public bool TexturesInHlslInclude;
         
         /// <summary>True if structs are in HLSLINCLUDE (shared).</summary>
@@ -89,13 +114,6 @@ namespace FS.Shaders.Editor
         
         /// <summary>Parsed Interpolators struct.</summary>
         public StructDefinition Interpolators;
-        
-        //=============================================================================
-        // Textures
-        //=============================================================================
-        
-        /// <summary>All texture declarations found.</summary>
-        public List<TextureDeclaration> Textures = new List<TextureDeclaration>();
         
         //=============================================================================
         // Passes
@@ -191,12 +209,24 @@ namespace FS.Shaders.Editor
         /// <summary>
         /// Check if a property already exists (in original Properties block or processor additions).
         /// </summary>
-        public bool PropertyExists(string propertyName) => PropertiesBlock?.Contains(propertyName) == true || ProcessorPropertiesEntries?.Contains(propertyName) == true;
-        
+        public bool PropertyExists(string propertyName)
+            => NameExistsIn(PropertiesBlock, propertyName) || NameExistsIn(ProcessorPropertiesEntries, propertyName);
+
         /// <summary>
         /// Check if a CBUFFER entry already exists (in original CBUFFER or processor additions).
         /// </summary>
-        public bool CBufferEntryExists(string entryName) =>  CBufferContent?.Contains(entryName) == true || ProcessorCBufferEntries?.Contains(entryName) == true;
+        public bool CBufferEntryExists(string entryName)
+            => NameExistsIn(CBufferContent, entryName) || NameExistsIn(ProcessorCBufferEntries, entryName);
+
+        /// <summary>
+        /// Whole-identifier match. A plain Contains would let "_Tessellation" match inside
+        /// "_TessellationFactor", suppressing injection of properties that don't exist.
+        /// </summary>
+        static bool NameExistsIn(string source, string name)
+        {
+            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(name)) return false;
+            return Regex.IsMatch(source, $@"\b{Regex.Escape(name)}\b");
+        }
         
         public bool TessellationEnabled => HasFeature("Tessellation");
     }
@@ -296,17 +326,6 @@ namespace FS.Shaders.Editor
     }
     
     /// <summary>
-    /// A texture declaration.
-    /// </summary>
-    public class TextureDeclaration
-    {
-        public string Name;           // _BaseMap
-        public string Type;           // TEXTURE2D, TEXTURE3D, etc.
-        public string SamplerName;    // sampler_BaseMap
-        public string RawDeclaration; // Full declaration line(s)
-    }
-    
-    /// <summary>
     /// Information about a shader pass.
     /// </summary>
     public class PassInfo
@@ -315,11 +334,27 @@ namespace FS.Shaders.Editor
         public string LightMode;
         public string FullSource;
         public string HlslProgram;    // Content between HLSLPROGRAM/ENDHLSL
+
+        /// <summary>
+        /// <see cref="HlslProgram"/> with its #include directives inlined. Only used to
+        /// look things up (see <see cref="ShaderContext.BuildSearchSource(PassInfo)"/>);
+        /// anything that edits or copies pass code uses <see cref="HlslProgram"/>, so
+        /// the emitted shader keeps its #include lines for the compiler to resolve.
+        /// </summary>
+        public string ResolvedHlslProgram;
+
         public int StartIndex;
         public int EndIndex;
         public string VertexFunctionName;
         public string FragmentFunctionName;
-        
+
+        /// <summary>
+        /// The value of this pass's own Cull render state (e.g. "Back", "Off", "[_Cull]"),
+        /// or null if the pass doesn't declare one and so inherits the SubShader's.
+        /// Generated passes copy the reference pass's value so they cull like it does.
+        /// </summary>
+        public string CullState;
+
         //=============================================================================
         // Per-Pass Struct Info (detected from this pass's vertex function signature)
         //=============================================================================

@@ -55,7 +55,7 @@ namespace FS.Shaders.Editor
             }
             
             s_Initialized = true;
-            Debug.Log($"[ShaderPassInjectorRegistry] Registered {s_Injectors.Count} pass injectors");
+            ShaderGenLog.Info($"[ShaderPassInjectorRegistry] Registered {s_Injectors.Count} pass injectors");
         }
         
         //=============================================================================

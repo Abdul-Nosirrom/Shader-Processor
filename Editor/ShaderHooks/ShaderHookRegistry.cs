@@ -54,8 +54,8 @@ namespace FS.Shaders.Editor
             
             s_Hooks = s_Hooks.OrderBy(h => h.PragmaName).ToList();
             s_Initialized = true;
-            
-            Debug.Log($"[ShaderHookRegistry] Registered {s_Hooks.Count} hooks");
+
+            ShaderGenLog.Info($"[ShaderHookRegistry] Registered {s_Hooks.Count} hooks");
         }
         
         //=============================================================================

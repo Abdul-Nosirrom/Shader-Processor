@@ -26,7 +26,7 @@ namespace FS.Shaders.Editor
     ///   #pragma fragmentOutput:normal myNormalVar
     ///   #pragma fragmentOutput:emission myEmissionVar
     /// </summary>
-    [ShaderTagProcessor("InjectForwardBody", priority: 200)]
+    [ShaderTagProcessor]
     public class ForwardBodyInjector : ShaderTagProcessorBase
     {
         public override string TagName => "InjectForwardBody";
@@ -64,7 +64,7 @@ namespace FS.Shaders.Editor
         /// </summary>
         static string BuildVertexBody(ShaderContext ctx, string passName)
         {
-            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram);
+            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass);
             string funcName = ctx.ReferenceVertexFunctionName;
             
             // Detect user's variable names before extraction
@@ -158,7 +158,7 @@ namespace FS.Shaders.Editor
             string expression = ResolveReturnExpression(injector, ctx, outputMap);
             if (expression == null) return null;
             
-            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram);
+            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass);
             string funcName = ctx.ReferenceFragmentFunctionName;
             
             // Detect user's parameter name before extraction
@@ -373,7 +373,7 @@ namespace FS.Shaders.Editor
                 return new Dictionary<string, string>();
 
             return ShaderPragmaUtility.ParseFragmentOutputs(
-                ctx.BuildSearchSource(ctx.ReferencePass.HlslProgram));
+                ctx.BuildSearchSource(ctx.ReferencePass));
         }
         
         //=============================================================================
@@ -397,7 +397,7 @@ namespace FS.Shaders.Editor
         public static string ExtractForwardVertexBody(ShaderContext ctx)
         {
             return ExtractFunctionBody(
-                ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram),
+                ctx.BuildSearchSource(ctx.ReferencePass),
                 ctx.ReferenceVertexFunctionName);
         }
     }

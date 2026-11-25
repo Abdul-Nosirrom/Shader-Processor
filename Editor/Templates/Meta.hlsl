@@ -13,8 +13,10 @@ Pass
     #pragma vertex MetaPassVertex
     #pragma fragment MetaPassFragment
     
-    #pragma multi_compile _ EDITOR_VISUALIZATION
-    
+    // The pass owns its pipeline keywords (editor visualisation). The forward lighting
+    // keywords gate themselves out on SHADERGEN_GENERATED_PASS.
+    #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/MetaKeywords.hlsl"
+
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MetaInput.hlsl"
     
@@ -27,7 +29,6 @@ Pass
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
-    {{TEXTURES}}
     
     // -------------------------------------------------------------------------
     // Structs
@@ -56,6 +57,11 @@ Pass
         
         output.{{SV_POSITION}} = UnityMetaVertexPosition(input.{{POSITION}}.xyz, input.{{TEXCOORD1}}, input.{{TEXCOORD2}}, unity_LightmapST, unity_DynamicLightmapST);
         
+        // Scene view lighting draw modes (Baked Lightmap, Albedo, ...) read these, same as URP's UniversalVertexMeta
+        #ifdef EDITOR_VISUALIZATION
+            UnityEditorVizData(input.{{POSITION}}.xyz, input.{{TEXCOORD0}}.xy, input.{{TEXCOORD1}}.xy, input.{{TEXCOORD2}}.xy, output.VizUV, output.LightCoord);
+        #endif
+        
         return output;
     }
 
@@ -69,15 +75,17 @@ Pass
         {{FORWARD_FRAGMENT_BODY}}
         
         {
-            // Sample base color for meta pass (lightmap baking)
-            // TODO: Sample _BaseMap if available
-            half4 albedo = half4(1, 1, 1, 1);
-            
+            // Fallback when forward body injection isn't driving the return value:
+            // bake as plain white albedo with no emission. Use InjectForwardBody plus
+            // fragmentOutput pragmas to feed real surface data to the lightmapper.
             MetaInput metaInput = (MetaInput)0;
-            metaInput.Albedo = albedo.rgb;
+            metaInput.Albedo = half3(1, 1, 1);
             metaInput.Emission = half3(0, 0, 0);
-            //metaInput.SpecularColor = half3(0, 0, 0);
-            
+            #ifdef EDITOR_VISUALIZATION
+                metaInput.VizUV = input.VizUV;
+                metaInput.LightCoord = input.LightCoord;
+            #endif
+
             return UnityMetaFragment(metaInput);
         }
     }

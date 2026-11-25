@@ -3,7 +3,7 @@
 // =============================================================================
 // DOTS_INSTANCING.HLSL
 // Keywords for GPU instancing, DOTS, and GPU Resident Drawer support.
-// Use: #include_with_pragmas "Library/Keywords/DOTSInstancing.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/DOTSInstancing.hlsl"
 // =============================================================================
 
 // -----------------------------------------------------------------------------

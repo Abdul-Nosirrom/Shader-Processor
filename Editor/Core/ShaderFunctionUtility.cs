@@ -115,7 +115,7 @@ namespace FS.Shaders.Editor
 
         /// <summary>
         /// Find a function definition by name in source code.
-        /// Returns the first match, or null if the function is not found.
+        /// Returns the first definition, or null if the function is not found.
         ///
         /// Handles optional modifiers, nested parens in parameter lists,
         /// output semantics (: SV_Target), and comment-aware brace matching.
@@ -126,13 +126,23 @@ namespace FS.Shaders.Editor
                 return null;
 
             string sigPattern = string.Format(SigPatternTemplate, Regex.Escape(funcName));
-            var match = Regex.Match(source, sigPattern,
+            var matches = Regex.Matches(source, sigPattern,
                 RegexOptions.IgnorePatternWhitespace | RegexOptions.Singleline);
 
-            if (!match.Success)
-                return null;
+            // Prose can look like a signature: a comment saying "never run Frag (no hooks)"
+            // matches the pattern. Taking only the first match let such a comment hide the
+            // real function, so RemoveFunction left Frag in every generated pass.
+            foreach (Match match in matches)
+            {
+                if (ShaderBlockUtility.IsInComment(source, match.Index))
+                    continue;
 
-            return ParseFunctionFromSignatureMatch(source, match, funcName);
+                var info = ParseFunctionFromSignatureMatch(source, match, funcName);
+                if (info != null)
+                    return info;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -152,6 +162,10 @@ namespace FS.Shaders.Editor
 
             foreach (Match match in matches)
             {
+                // Same as FindFunction: a comment that reads like a signature isn't one
+                if (ShaderBlockUtility.IsInComment(source, match.Index))
+                    continue;
+
                 var info = ParseFunctionFromSignatureMatch(source, match, funcName);
                 if (info != null)
                     results.Add(info.Value);

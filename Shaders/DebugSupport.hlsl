@@ -8,6 +8,9 @@
 // =============================================================================
 
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Debug/Debugging3D.hlsl"
+// CanDebugOverrideOutputColor calls the GetShadowCoord(positionWS, positionCS) overload declared there. Without this,
+// a shader that includes this file before Common.hlsl fails to compile its DEBUG_DISPLAY variant.
+#include "Packages/com.abdulal.shaderprocessor/Shaders/Common.hlsl"
 
 // Call this in fragment shader to set up debug data
 void SetupDebugData(inout InputData inputData, float4 positionCS, float4 shadowCoord, float3 normalWS, float3 viewDirWS)

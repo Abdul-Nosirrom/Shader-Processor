@@ -157,8 +157,18 @@ namespace FS.Shaders.Editor
                 {
                     sb.AppendLine($"    {field.RawLine}");
                 }
+                else if (!string.IsNullOrEmpty(field.RawLine))
+                {
+                    // Emit the original line rather than reconstructing from
+                    // Type/Name/Semantic - reconstruction drops interpolation modifiers
+                    // (nointerpolation, centroid, etc.) that the field parser doesn't
+                    // capture separately, which changes shading in generated passes.
+                    string line = field.RawLine.Contains(";") ? field.RawLine : field.RawLine + ";";
+                    sb.AppendLine($"    {line}");
+                }
                 else
                 {
+                    // Programmatically-built field with no source line to preserve
                     sb.AppendLine($"    {field.Type} {field.Name} : {field.Semantic};");
                 }
             }

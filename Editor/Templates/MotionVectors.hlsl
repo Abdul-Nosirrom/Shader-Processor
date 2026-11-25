@@ -6,19 +6,24 @@ Pass
     Name "MotionVectors"
     Tags { "LightMode" = "MotionVectors" }
     ColorMask RG
-    Cull Back
+    {{CULL}}
 
     HLSLPROGRAM
     #pragma target 4.5
     {{TESSELLATION_PRAGMAS}}
     {{VERTEX_PRAGMA}}
     #pragma fragment MotionVectorsFragment
-    
-    #pragma multi_compile _ _ADD_PRECOMPUTED_VELOCITY
-    
+
+    // The pass owns its pipeline keywords (Alembic velocity, LOD crossfade, instancing).
+    // The forward lighting keywords gate themselves out on SHADERGEN_GENERATED_PASS.
+    #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/MotionVectorsKeywords.hlsl"
+
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MotionVectorsCommon.hlsl"
-    
+    #if defined(LOD_FADE_CROSSFADE)
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+    #endif
+
     // -------------------------------------------------------------------------
     // Preprocessor from MainPass (includes, defines, keywords)
     // -------------------------------------------------------------------------
@@ -28,7 +33,6 @@ Pass
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
-    {{TEXTURES}}
     
     // -------------------------------------------------------------------------
     // Structs

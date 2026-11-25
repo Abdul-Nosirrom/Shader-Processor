@@ -3,7 +3,8 @@
 // =============================================================================
 // META_KEYWORDS.HLSL
 // Keywords for the Meta pass (lightmap baking).
-// Use: #include_with_pragmas "Library/Keywords/MetaKeywords.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/MetaKeywords.hlsl"
+// The ShaderGen Meta template includes this, so generated passes get it already.
 // =============================================================================
 
 #pragma target 4.5

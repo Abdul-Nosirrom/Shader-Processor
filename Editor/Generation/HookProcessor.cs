@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
@@ -105,22 +106,24 @@ namespace FS.Shaders.Editor
         {
             /// <summary>
             /// Preprocessor directives (#include, #include_with_pragmas, #define, #pragma)
-            /// that need to appear before CBUFFER/textures so macros are available.
+            /// that need to appear before CBUFFER/structs so macros are available,
+            /// inside the same #if/#ifdef conditions they were written under.
             /// </summary>
             public string Preprocessor;
-            
+
             /// <summary>
-            /// Helper functions, code, and conditional compilation blocks (#ifdef etc.)
-            /// that reference CBUFFER variables and textures.
+            /// Texture and sampler declarations, helper functions and other code that
+            /// reference CBUFFER variables, with their #if/#ifdef conditions.
             /// </summary>
             public string Content;
         }
-        
+
         /// <summary>
         /// Extract reusable content from Forward pass HLSLPROGRAM, split into
         /// preprocessor directives and code. Preprocessor goes above CBUFFER in
         /// templates so macros used in CBUFFER/structs are defined. Code goes
-        /// below CBUFFER/textures/structs since it references those declarations.
+        /// below CBUFFER/structs since it references those declarations; the
+        /// pass's texture and sampler declarations travel with it.
         /// </summary>
         public static ForwardContentResult ExtractForwardPassContentSplit(
             ShaderContext ctx, string targetAttrName, string targetInterpName)
@@ -133,18 +136,22 @@ namespace FS.Shaders.Editor
             string hlsl = ctx.ReferencePass.HlslProgram;
 
             // =====================================================================
-            // CRITICAL: Strip CBUFFER, textures BEFORE function removal.
+            // CRITICAL: Strip the CBUFFER BEFORE function removal.
             // RemoveFunction's regex uses (\w+\s+)? for optional modifiers, which
             // can greedily match nearby keywords like CBUFFER_END across newlines,
             // eating them as part of the function removal. Stripping the CBUFFER
             // first eliminates this interaction.
             // =====================================================================
-            
+
             // Remove CBUFFER (handled by {{CBUFFER}} in template)
             hlsl = ShaderBlockUtility.StripCBuffer(hlsl);
 
-            // Remove texture/sampler declarations (handled by {{TEXTURES}} in template)
-            hlsl = ShaderBlockUtility.StripTextureDeclarations(hlsl);
+            // Texture and sampler declarations stay as written. They land in the code
+            // half, which every template places above the hook functions and the
+            // vertex/fragment bodies, and that half keeps their #if guards. Unlike the
+            // CBUFFER, nothing adds textures to a generated pass, so there's nothing to
+            // rebuild. Collecting them used to drop any declaration the parser didn't
+            // recognise (a texture without its own sampler, texture arrays).
 
             // Remove pragmas we'll replace
             hlsl = RemovePragmas(hlsl, "vertex", "fragment");
@@ -183,27 +190,42 @@ namespace FS.Shaders.Editor
             // Split into preprocessor directives and code.
             //
             // Preprocessor: #include, #include_with_pragmas, #define, #pragma
-            //   These need to be above CBUFFER/textures/structs so macros they
+            //   These need to be above CBUFFER/structs so macros they
             //   define are available (e.g., COMBAT_PARAMETERS from an include).
             //
-            // Code: everything else, including #ifdef/#endif/#if/#else/#elif/#undef
-            //   These wrap function bodies and code that references CBUFFER/textures,
-            //   so they must come after those declarations.
+            // Code: everything else, including #undef/#error/#warning and texture
+            //   and sampler declarations. Helper functions reference the CBUFFER, so
+            //   they come after it; textures keep their order relative to the helpers.
+            //
+            // Conditionals (#if/#ifdef/#ifndef/#elif/#else/#endif) go to BOTH.
+            //   A define hoisted out of an #ifdef/#else pair has to keep its
+            //   condition, otherwise both branches become unconditional and the
+            //   last definition wins. Mirroring every conditional keeps both halves
+            //   balanced. A block that only wrapped code leaves an empty
+            //   #ifdef/#endif pair in the preprocessor half, which is harmless.
+            //
+            // The split works on logical lines so a multi-line #define (lines
+            // ending in '\') moves as one unit instead of leaving its body behind.
             // =====================================================================
             var preprocessorLines = new StringBuilder();
             var codeLines = new StringBuilder();
-            
-            foreach (var line in hlsl.Split('\n'))
+
+            foreach (string logicalLine in SplitLogicalLines(hlsl))
             {
-                string trimmed = line.TrimStart();
-                
-                if (IsPreprocessorSetupDirective(trimmed))
+                string trimmed = logicalLine.TrimStart();
+
+                if (IsConditionalDirective(trimmed))
                 {
-                    preprocessorLines.AppendLine(line);
+                    preprocessorLines.AppendLine(logicalLine);
+                    codeLines.AppendLine(logicalLine);
+                }
+                else if (IsPreprocessorSetupDirective(trimmed))
+                {
+                    preprocessorLines.AppendLine(logicalLine);
                 }
                 else
                 {
-                    codeLines.AppendLine(line);
+                    codeLines.AppendLine(logicalLine);
                 }
             }
             
@@ -218,27 +240,77 @@ namespace FS.Shaders.Editor
         
         /// <summary>
         /// Check if a line is a preprocessor setup directive that needs to appear
-        /// before CBUFFER/textures/structs (defines macros, includes files, sets keywords).
-        /// 
+        /// before CBUFFER/structs (defines macros, includes files, sets keywords).
+        ///
         /// Returns true for: #include, #include_with_pragmas, #define, #pragma
-        /// Returns false for: #ifdef, #endif, #if, #else, #elif, #undef, #error, #warning
-        /// These conditional/control directives typically wrap code blocks that reference
-        /// CBUFFER variables, so they need to stay with the code.
+        /// Returns false for everything else. Conditionals are handled separately by
+        /// <see cref="IsConditionalDirective"/>; #undef, #error and #warning stay with the code.
         /// </summary>
         static bool IsPreprocessorSetupDirective(string trimmedLine)
         {
             if (!trimmedLine.StartsWith("#"))
                 return false;
-            
+
             // These directives set up the compilation environment (defines, includes, keywords)
             // and must appear before declarations that use them.
             if (trimmedLine.StartsWith("#include"))      return true;  // covers #include and #include_with_pragmas
             if (trimmedLine.StartsWith("#define"))        return true;
             if (trimmedLine.StartsWith("#pragma"))        return true;
-            
-            // Everything else (#ifdef, #endif, #if, #else, #elif, #undef, #error, etc.)
-            // stays with the code since it typically guards code blocks.
+
             return false;
+        }
+
+        // \b requires a whole directive name, and \s* allows the legal "# if" spelling.
+        static readonly Regex s_conditionalDirectiveRegex = new Regex(
+            @"^#\s*(if|ifdef|ifndef|elif|else|endif)\b", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Check if a line opens, switches or closes a conditional block
+        /// (#if, #ifdef, #ifndef, #elif, #else, #endif). These are written to both the
+        /// preprocessor and code halves of the split so each half keeps the conditions
+        /// its lines were written under.
+        /// </summary>
+        static bool IsConditionalDirective(string trimmedLine)
+        {
+            return s_conditionalDirectiveRegex.IsMatch(trimmedLine);
+        }
+
+        /// <summary>
+        /// Split source into logical lines. A physical line ending in '\' (ignoring
+        /// trailing whitespace) is joined to the next one, the same way the HLSL
+        /// preprocessor splices lines, so a multi-line #define comes back as one entry.
+        ///
+        /// Carriage returns are dropped from each physical line. Keeping them would put
+        /// "\r" plus AppendLine's own "\r\n" after a trailing '\', and a splice is only
+        /// guaranteed when the '\' is directly followed by a single line ending.
+        /// </summary>
+        static List<string> SplitLogicalLines(string source)
+        {
+            var logicalLines = new List<string>();
+            var current = new StringBuilder();
+            bool isContinuing = false;
+
+            foreach (string rawLine in source.Split('\n'))
+            {
+                string line = rawLine.TrimEnd('\r');
+
+                if (isContinuing)
+                    current.Append('\n');
+                current.Append(line);
+
+                isContinuing = line.TrimEnd().EndsWith("\\");
+                if (!isContinuing)
+                {
+                    logicalLines.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+
+            // Source that ends on a '\' line still has a pending entry
+            if (current.Length > 0)
+                logicalLines.Add(current.ToString());
+
+            return logicalLines;
         }
         
         /// <summary>

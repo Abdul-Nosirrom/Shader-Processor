@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace FS.Shaders.Editor
 {
-    [ShaderTagProcessor("Tessellation", priority: 5)]
+    [ShaderTagProcessor]
     public class TessellationProcessor : ShaderTagProcessorBase
     {
         public override string TagName => "Tessellation";
@@ -71,7 +71,13 @@ namespace FS.Shaders.Editor
                 ["NORMAL"] = attrStruct?.GetField("NORMAL")?.Name ?? "normalOS",
             };
             
-            TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName, pass.Name ?? "");
+            // No pass-name prefix here. Authored passes keep their original struct names,
+            // so the user's hook functions are already in scope under their original names.
+            // The Tessellation template has no {{HOOK_FUNCTIONS}} marker, so a prefixed
+            // call would reference a renamed function body that never gets emitted.
+            // Prefixing only applies to generated passes, where the pass template's
+            // {{HOOK_FUNCTIONS}} emits the renamed copies (see GetPassReplacements).
+            TemplateEngine.AddHookReplacements(tessReplacements, ctx, attrName, interpName);
 
             string tessCode = TemplateEngine.Process(template, tessReplacements);
             
@@ -112,7 +118,7 @@ namespace FS.Shaders.Editor
                 + newHlslContent
                 + ctx.ProcessedSource.Substring(hlslContentIdx + hlslContent.Length);
             
-            Debug.Log($"[TessellationProcessor] Injected tessellation into pass '{pass.Name}'");
+            ShaderGenLog.Info($"[TessellationProcessor] Injected tessellation into pass '{pass.Name}'");
         }
         
         public override Dictionary<string, string> GetPassReplacements(ShaderContext ctx, string passName)

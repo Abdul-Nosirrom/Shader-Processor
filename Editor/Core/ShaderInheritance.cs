@@ -23,6 +23,7 @@ namespace FS.Shaders.Editor
     /// <item>Property overrides and additions (with auto-generated HLSL declarations)</item>
     /// <item>Pass exclusion via "ExcludePasses" tag</item>
     /// <item>Pass-level tag and render state overrides (matched by Name)</item>
+    /// <item>Full pass additions (child Pass blocks with an HLSLPROGRAM are appended)</item>
     /// <item>HLSLINCLUDE appending for hook functions and utilities</item>
     /// <item>InheritHook injection points for parent-defined extensibility</item>
     /// <item>Pass injection markers ([InjectBasePasses], [InjectPass:X])</item>
@@ -170,7 +171,21 @@ namespace FS.Shaders.Editor
         /// </summary>
         public static bool UsesInheritance(string source)
         {
-            return s_inheritTagRegex.IsMatch(source);
+            return FindInheritTag(source) != null;
+        }
+
+        /// <summary>
+        /// Find the first Inherit tag that isn't commented out.
+        /// Returns null if none exists.
+        /// </summary>
+        static Match FindInheritTag(string source)
+        {
+            foreach (Match match in s_inheritTagRegex.Matches(source))
+            {
+                if (!ShaderBlockUtility.IsInComment(source, match.Index))
+                    return match;
+            }
+            return null;
         }
         
         /// <summary>
@@ -183,9 +198,9 @@ namespace FS.Shaders.Editor
         {
             var result = new ResolveResult { Source = childSource, ParentPath = null };
             
-            // Check for Inherit tag
-            var inheritMatch = s_inheritTagRegex.Match(childSource);
-            if (!inheritMatch.Success)
+            // Check for Inherit tag (commented-out tags don't count)
+            var inheritMatch = FindInheritTag(childSource);
+            if (inheritMatch == null)
                 return result;
             
             string parentName = inheritMatch.Groups[1].Value;
@@ -218,9 +233,15 @@ namespace FS.Shaders.Editor
             }
             
             string parentSource = File.ReadAllText(parentPath);
-            
+
+            // Child-authored "../" includes are relative to the child's folder. Turn them
+            // into project paths now, before child content is merged into the parent:
+            // step 14 rewrites what's left against the PARENT's folder, which is only
+            // right for the parent's own includes.
+            childSource = RewriteRelativeIncludes(childSource, childPath);
+
             // Guard: chained inheritance
-            if (s_inheritTagRegex.IsMatch(parentSource))
+            if (FindInheritTag(parentSource) != null)
             {
                 Debug.LogError($"[ShaderInheritance] Parent shader \"{parentName}\" also uses Inherit. " +
                     "Chained inheritance is not supported.");
@@ -261,17 +282,20 @@ namespace FS.Shaders.Editor
             
             // Step 9: Apply child pass overrides (tags, render state)
             merged = ApplyPassOverrides(merged, childSource);
-            
-            // Step 10: Append child HLSLINCLUDE content (hook functions, includes)
+
+            // Step 10: Append child full passes (Pass blocks WITH an HLSLPROGRAM)
+            merged = AppendChildFullPasses(merged, childSource);
+
+            // Step 11: Append child HLSLINCLUDE content (hook functions, includes)
             merged = AppendChildHlslInclude(merged, childSource);
-            
-            // Step 11: Resolve InheritHook markers using child's pragma bindings
+
+            // Step 12: Resolve InheritHook markers using child's pragma bindings
             merged = ResolveInheritHooks(merged, childSource);
-            
-            // Step 12: Append any pass injection markers from the child
+
+            // Step 13: Append any pass injection markers from the child
             merged = AppendChildMarkers(merged, childSource);
-            
-            // Step 13: Rewrite relative #include paths so they resolve correctly
+
+            // Step 14: Rewrite relative #include paths so they resolve correctly
             // from any child location. Relative paths (../../foo.hlsl) are resolved
             // against the parent's directory and converted to project-relative paths.
             merged = RewriteRelativeIncludes(merged, parentPath);
@@ -280,7 +304,7 @@ namespace FS.Shaders.Editor
             result.ParentPath = parentPath;
             result.ParentName = parentName;
             
-            Debug.Log($"[ShaderInheritance] Resolved \"{childName}\" from parent \"{parentName}\"");
+            ShaderGenLog.Info($"[ShaderInheritance] Resolved \"{childName}\" from parent \"{parentName}\"");
             return result;
         }
         
@@ -427,8 +451,9 @@ namespace FS.Shaders.Editor
                 int parentEnd = ShaderSourceUtility.FindMatchingBrace(merged, parentBrace);
                 string propsRegion = merged.Substring(parentBrace, parentEnd - parentBrace);
                 
+                // \b so a child "_Bar" doesn't match inside a parent "_Foo_Bar" declaration
                 var parentPropMatch = Regex.Match(propsRegion,
-                    @"^[^\n]*" + Regex.Escape(propName) + @"\s*\([^\n]*$",
+                    @"^[^\n]*\b" + Regex.Escape(propName) + @"\s*\([^\n]*$",
                     RegexOptions.Multiline);
                 
                 if (parentPropMatch.Success)
@@ -497,9 +522,10 @@ namespace FS.Shaders.Editor
                 
                 string propName = nameMatch.Groups[1].Value;
                 
-                // Check if this property already exists in parent
+                // Check if this property already exists in parent.
+                // \b so "_Bar" doesn't count "_Foo_Bar" as an existing declaration.
                 bool existsInParent = Regex.IsMatch(parentPropsRegion,
-                    Regex.Escape(propName) + @"\s*\(");
+                    @"\b" + Regex.Escape(propName) + @"\s*\(");
                 
                 if (!existsInParent)
                     newProps.Add(line);
@@ -547,36 +573,42 @@ namespace FS.Shaders.Editor
                 }
             }
             
-            // Insert CBUFFER entries before CBUFFER_END
+            // Both go into every UnityPerMaterial block, not just the first CBUFFER_END in
+            // the file: a parent with pass-local CBUFFERs needs the new entries in each pass
+            // (the SRP batcher wants identical layouts), and a raw IndexOf could also land
+            // in a comment or a differently-named CBUFFER.
+
+            // Scalars (and texture _ST vectors) go inside the CBUFFER
             if (cbufferEntries.Count > 0)
             {
-                int cbufferEnd = merged.IndexOf("CBUFFER_END");
-                if (cbufferEnd >= 0)
-                {
-                    var sb = new StringBuilder();
-                    foreach (var entry in cbufferEntries)
-                        sb.AppendLine("            " + entry);
-                    merged = merged.Insert(cbufferEnd, sb.ToString());
-                }
+                var sb = new StringBuilder();
+                foreach (var entry in cbufferEntries)
+                    sb.AppendLine("            " + entry);
+
+                string inserted = ShaderBlockUtility.InsertBeforeCBufferEnd(merged, sb.ToString());
+                if (inserted != null)
+                    merged = inserted;
+                else
+                    Debug.LogWarning("[ShaderInheritance] Child adds properties but the parent has no " +
+                        "CBUFFER_START(UnityPerMaterial) block to declare them in.");
             }
-            
-            // Insert texture declarations after CBUFFER_END line
+
+            // Textures and samplers go right after the CBUFFER
             if (textureEntries.Count > 0)
             {
-                int cbufferEnd = merged.IndexOf("CBUFFER_END");
-                if (cbufferEnd >= 0)
-                {
-                    int endOfLine = merged.IndexOf('\n', cbufferEnd);
-                    if (endOfLine < 0) endOfLine = merged.Length;
-                    
-                    var sb = new StringBuilder();
-                    sb.AppendLine();
-                    foreach (var entry in textureEntries)
-                        sb.AppendLine("        " + entry);
-                    merged = merged.Insert(endOfLine + 1, sb.ToString());
-                }
+                var sb = new StringBuilder();
+                sb.AppendLine();
+                foreach (var entry in textureEntries)
+                    sb.AppendLine("        " + entry);
+
+                string inserted = ShaderBlockUtility.InsertAfterCBufferEnd(merged, sb.ToString());
+                if (inserted != null)
+                    merged = inserted;
+                else
+                    Debug.LogWarning("[ShaderInheritance] Child adds textures but the parent has no " +
+                        "CBUFFER_START(UnityPerMaterial) block to place them after.");
             }
-            
+
             return merged;
         }
         
@@ -619,7 +651,7 @@ namespace FS.Shaders.Editor
                 if (lineStart < 0) lineStart = 0;
                 
                 merged = merged.Remove(lineStart, block.EndIndex - lineStart);
-                Debug.Log($"[ShaderInheritance] Excluded pass \"{passName}\"");
+                ShaderGenLog.Info($"[ShaderInheritance] Excluded pass \"{passName}\"");
                 return merged;
             }
             
@@ -642,8 +674,10 @@ namespace FS.Shaders.Editor
             
             foreach (var block in childPassBlocks)
             {
-                // Skip passes with HLSLPROGRAM (those are full pass replacements, not overrides)
-                if (block.Content.Contains("HLSLPROGRAM")) continue;
+                // Skip passes with HLSLPROGRAM (those are full pass replacements, not
+                // overrides). Comment-aware so a note like "// parent HLSLPROGRAM kept"
+                // in a metadata-only block doesn't misclassify it.
+                if (HasUncommentedOccurrence(block.Content, "HLSLPROGRAM")) continue;
                 
                 // Get the pass name
                 var nameMatch = s_passNameRegex.Match(block.Content);
@@ -693,7 +727,7 @@ namespace FS.Shaders.Editor
                        + modifiedRegion
                        + merged.Substring(block.EndIndex);
                 
-                Debug.Log($"[ShaderInheritance] Applied overrides to pass \"{passName}\"");
+                ShaderGenLog.Info($"[ShaderInheritance] Applied overrides to pass \"{passName}\"");
                 return merged;
             }
             
@@ -815,10 +849,80 @@ namespace FS.Shaders.Editor
                 if (lineStart < 0) lineStart = 0;
                 return passContent.Insert(lineStart + 1, "    " + fullLine + "\n");
             }
-            
+
             return passContent;
         }
-        
+
+        //=============================================================================
+        // Child Full Passes
+        //=============================================================================
+
+        /// <summary>
+        /// Append child Pass blocks that contain an HLSLPROGRAM to the merged source.
+        /// These are complete passes the child adds on top of the parent's, as opposed
+        /// to the metadata-only override blocks handled by ApplyPassOverrides.
+        /// Inserted just before the SubShader closing brace, ahead of any injection
+        /// markers (AppendChildMarkers runs after this, inserting at the same position).
+        ///
+        /// A name collision with a parent pass gets a warning - the child pass is still
+        /// appended. Use ExcludePasses to remove the parent's version when replacing.
+        /// </summary>
+        static string AppendChildFullPasses(string merged, string childSource)
+        {
+            var childPassBlocks = ShaderBlockUtility.FindAllPassBlocks(childSource);
+            if (childPassBlocks.Count == 0) return merged;
+
+            var sb = new StringBuilder();
+
+            foreach (var block in childPassBlocks)
+            {
+                // Metadata-only blocks were consumed as overrides in ApplyPassOverrides.
+                // Comment-aware to mirror the classification check there.
+                if (!HasUncommentedOccurrence(block.Content, "HLSLPROGRAM")) continue;
+
+                var nameMatch = s_passNameRegex.Match(block.Content);
+                string passName = nameMatch.Success ? nameMatch.Groups[1].Value : null;
+
+                if (passName != null && FindPassByName(merged, passName) != null)
+                {
+                    Debug.LogWarning($"[ShaderInheritance] Child pass \"{passName}\" has the same " +
+                        "name as a parent pass; both will be in the final shader. Add the parent's " +
+                        "pass to \"ExcludePasses\" if the child is meant to replace it.");
+                }
+
+                string passText = childSource.Substring(block.StartIndex, block.EndIndex - block.StartIndex);
+                sb.AppendLine();
+                sb.AppendLine("        " + passText);
+                ShaderGenLog.Info($"[ShaderInheritance] Added child pass \"{passName ?? "unnamed"}\"");
+            }
+
+            if (sb.Length == 0) return merged;
+
+            int insertIdx = FindSubShaderClosePosition(merged);
+            if (insertIdx < 0)
+            {
+                Debug.LogWarning("[ShaderInheritance] Could not find SubShader closing brace for child pass insertion.");
+                return merged;
+            }
+
+            return merged.Insert(insertIdx, sb.ToString());
+        }
+
+        /// <summary>
+        /// Find a pass block by its Name tag (case-insensitive). Returns null if not found.
+        /// </summary>
+        static ShaderBlockUtility.PassBlockRegion? FindPassByName(string source, string passName)
+        {
+            foreach (var block in ShaderBlockUtility.FindAllPassBlocks(source))
+            {
+                var nameMatch = s_passNameRegex.Match(block.Content);
+                if (nameMatch.Success &&
+                    nameMatch.Groups[1].Value.Equals(passName, StringComparison.OrdinalIgnoreCase))
+                    return block;
+            }
+            return null;
+        }
+
         //=============================================================================
         // HLSLINCLUDE Appending
         //=============================================================================
@@ -1006,6 +1110,10 @@ namespace FS.Shaders.Editor
             var pragmaMatches = s_inheritHookPragmaRegex.Matches(childSource);
             foreach (Match m in pragmaMatches)
             {
+                // Commented-out bindings don't count
+                if (ShaderBlockUtility.IsInComment(childSource, m.Index))
+                    continue;
+
                 hookBindings[m.Groups[1].Value] = m.Groups[2].Value;
             }
             
@@ -1142,13 +1250,15 @@ namespace FS.Shaders.Editor
         /// correctly regardless of where the child shader lives.
         /// Paths starting with "Packages/" are left unchanged since they're
         /// already package-relative and work from any location.
-        /// Relative paths are resolved against the parent's directory and
+        /// Relative paths are resolved against the directory of
+        /// <paramref name="ownerPath"/>, the shader the source was written in (the
+        /// child for child content, the parent for the merged result), and
         /// converted to project-relative paths (e.g., "Assets/...").
         /// </summary>
-        static string RewriteRelativeIncludes(string source, string parentPath)
+        static string RewriteRelativeIncludes(string source, string ownerPath)
         {
-            string parentDir = Path.GetDirectoryName(parentPath);
-            if (string.IsNullOrEmpty(parentDir)) return source;
+            string ownerDir = Path.GetDirectoryName(ownerPath);
+            if (string.IsNullOrEmpty(ownerDir)) return source;
             
             return s_relativeIncludeRegex.Replace(source, match =>
             {
@@ -1156,8 +1266,8 @@ namespace FS.Shaders.Editor
                 string relPath = match.Groups[2].Value;  // ../../ShaderLibrary/Foo.hlsl
                 string suffix = match.Groups[3].Value;   // "
                 
-                // Resolve relative to parent's directory
-                string absolutePath = Path.GetFullPath(Path.Combine(parentDir, relPath));
+                // Resolve relative to the owning shader's directory
+                string absolutePath = Path.GetFullPath(Path.Combine(ownerDir, relPath));
                 
                 // Convert back to a project-relative path (Assets/... or Packages/...)
                 // Unity uses forward slashes

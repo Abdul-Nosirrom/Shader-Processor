@@ -22,8 +22,16 @@ namespace FS.Shaders.Editor
         public override string[] GetAdditionalAttributeFields(ShaderContext ctx)
             => StructGenerator.EnsureAttributeField(ctx, "NORMAL", "float3", "normalOS");
 
+        // Brace-wrapped like MotionVectors. The LOD crossfade sits right before the return, the
+        // same place as the template's fallback block and URP's ShadowCasterPass. A forward body
+        // that already applies its own crossfade clips the same pixels a second time, which is harmless.
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
-            => "return 0;";
+            => @"{
+#ifdef LOD_FADE_CROSSFADE
+        LODFadeCrossFade(input.{{SV_POSITION}});
+#endif
+        return 0;
+        }";
     }
     
     /// <summary>
@@ -37,8 +45,14 @@ namespace FS.Shaders.Editor
         public override string TemplateName => "DepthOnly";
         public override bool IsBasePass => true;
         
+        // Brace-wrapped with the LOD crossfade, see ShadowCasterPass
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
-            => "return input.{{SV_POSITION}}.z;";
+            => @"{
+#ifdef LOD_FADE_CROSSFADE
+        LODFadeCrossFade(input.{{SV_POSITION}});
+#endif
+        return input.{{SV_POSITION}}.z;
+        }";
     }
     
     /// <summary>
@@ -86,7 +100,7 @@ namespace FS.Shaders.Editor
                     // Normalize variable names to match what BuildVertexBody will produce,
                     // so we can reliably check for 'output.normalWS'
                     string userInputName = ForwardBodyInjector.DetectParameterName(
-                        ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram),
+                        ctx.BuildSearchSource(ctx.ReferencePass),
                         ctx.ReferenceVertexFunctionName) ?? "input";
                     string userOutputName = ForwardBodyInjector.DetectOutputVariableName(
                         vertexBody, ctx.InterpolatorsStructName) ?? "output";
@@ -108,10 +122,23 @@ namespace FS.Shaders.Editor
             };
         }
         
+        // Signed normal with w = 0, matching URP 17's DepthNormals passes. URP renders into an
+        // R8G8B8A8_SNorm target and SampleSceneNormals reads it back without decoding, so a
+        // [0,1] remap here would hand EdgeDetectionOutlines, SSR and decals a different encoding
+        // than URP Lit writes. URP only packs normals (octahedral) under _GBUFFER_NORMALS_OCT,
+        // which only the deferred renderer sets, and only with Accurate G-buffer Normals on.
+        // Supporting that path means adding the octahedral branch here and in the template.
+        // Brace-wrapped with the LOD crossfade, see ShadowCasterPass.
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
-            => isFallback
-                ? "return half4(normalize(input.{{NORMAL_WS}}) * 0.5 + 0.5, input.{{SV_POSITION}}.z);"
-                : "return half4(normalize({{output:normal}}) * 0.5 + 0.5, input.{{SV_POSITION}}.z);";
+        {
+            string normal = isFallback ? "input.{{NORMAL_WS}}" : "{{output:normal}}";
+            return @"{
+#ifdef LOD_FADE_CROSSFADE
+        LODFadeCrossFade(input.{{SV_POSITION}});
+#endif
+        return half4(NormalizeNormalPerPixel(" + normal + @"), 0.0);
+        }";
+        }
     }
     
     /// <summary>
@@ -142,18 +169,22 @@ namespace FS.Shaders.Editor
             "float4 prevPositionCS : TEXCOORD9;"
         };
         
-        // curPositionCS/prevPositionCS are always named this way (from struct override)
+        // curPositionCS/prevPositionCS are always named this way (from struct override).
+        // Brace-wrapped: this substitutes for a single 'return X;' statement, which may
+        // be the body of a braceless if. Unbraced, only the first statement would stay
+        // under the if and the return would become unconditional.
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
-            => @"
+            => @"{
 #ifdef LOD_FADE_CROSSFADE
         LODFadeCrossFade(input.{{SV_POSITION}});
 #endif
-        return float4(CalcNdcMotionVectorFromCsPositions(input.curPositionCS, input.prevPositionCS), 0, 0);";
+        return float4(CalcNdcMotionVectorFromCsPositions(input.curPositionCS, input.prevPositionCS), 0, 0);
+        }";
     }
     
     /// <summary>
-    /// Meta pass. Used for lightmap baking and GI.
-    /// Adds uv1/uv2 fields to Attributes for lightmap coordinates.
+    /// Meta pass. Used for lightmap baking and GI, and for the Scene view's lighting draw modes.
+    /// Adds uv0/uv1/uv2 fields to Attributes for lightmap coordinates and editor visualisation.
     /// </summary>
     [ShaderPass]
     public class MetaPass : ShaderPassInjector
@@ -163,10 +194,14 @@ namespace FS.Shaders.Editor
         public override bool IsBasePass => true;
 
         // UnityMetaVertexPosition needs TEXCOORD1 (static lightmap UV) and
-        // TEXCOORD2 (dynamic lightmap UV). Only added if not already present.
+        // TEXCOORD2 (dynamic lightmap UV); UnityEditorVizData also needs TEXCOORD0.
+        // Only added if not already present.
         public override string[] GetAdditionalAttributeFields(ShaderContext ctx)
         {
             var fields = new System.Collections.Generic.List<string>();
+
+            if (ctx.Attributes?.HasField("TEXCOORD0") != true)
+                fields.Add("float2 uv : TEXCOORD0;");
 
             if (ctx.Attributes?.HasField("TEXCOORD1") != true)
                 fields.Add("float2 uv1 : TEXCOORD1;");
@@ -176,7 +211,17 @@ namespace FS.Shaders.Editor
 
             return fields.Count > 0 ? fields.ToArray() : null;
         }
-        
+
+        // Scene view lighting draw modes read these through UnityMetaFragment. TEXCOORD10/11 stay
+        // clear of the slots other generated passes claim (README: Reserved Interpolator Semantics).
+        public override string[] GetAdditionalInterpolatorFields(ShaderContext ctx) => new[]
+        {
+            "#ifdef EDITOR_VISUALIZATION",
+            "float2 VizUV : TEXCOORD10;",
+            "float4 LightCoord : TEXCOORD11;",
+            "#endif"
+        };
+
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
         {
             if (isFallback)
@@ -185,14 +230,22 @@ namespace FS.Shaders.Editor
             MetaInput _mi = (MetaInput)0;
             _mi.Albedo = half3(1, 1, 1);
             _mi.Emission = half3(0, 0, 0);
+#ifdef EDITOR_VISUALIZATION
+            _mi.VizUV = input.VizUV;
+            _mi.LightCoord = input.LightCoord;
+#endif
             return UnityMetaFragment(_mi);
         }";
             }
-            
+
             return @"{
             MetaInput _mi = (MetaInput)0;
             _mi.Albedo = {{output:albedo}}.rgb;
             _mi.Emission = {{output:emission}};
+#ifdef EDITOR_VISUALIZATION
+            _mi.VizUV = input.VizUV;
+            _mi.LightCoord = input.LightCoord;
+#endif
             return UnityMetaFragment(_mi);
         }";
         }
@@ -220,7 +273,7 @@ namespace FS.Shaders.Editor
         
         const string OutlineProperties = @"
         // Outlines (Auto-injected by FreeSkies)
-        [SectionHeader(Outlines)]
+        [FoldoutGroup(Outlines)]
         [Toggle(_ENABLE_OUTLINES)] _EnableOutlines(""Enable Outlines"", Float) = 0
         [ShowIf(_ENABLE_OUTLINES)] _OutlineWidth(""Outline Width"", Range(0,1)) = 0.1
         [ShowIf(_ENABLE_OUTLINES)] _OutlineColor(""Outline Color"", Color) = (0,0,0,1)";
@@ -242,26 +295,30 @@ namespace FS.Shaders.Editor
             return OutlineCBuffer;
         }
         
+        // Brace-wrapped for the same reason as MotionVectors: multi-statement
+        // replacements must stay a single statement at the substitution site.
         public override string GetFragmentReturnExpression(ShaderContext ctx, bool isFallback)
         {
             if (isFallback)
             {
-                return @"
+                return @"{
 #ifdef _ENABLE_OUTLINES
         return _OutlineColor;
 #else
         discard;
         return 0;
-#endif";
+#endif
+        }";
             }
-            
-            return @"
+
+            return @"{
 #ifdef _ENABLE_OUTLINES
         return _OutlineColor * {{output:albedo}};
 #else
         discard;
         return 0;
-#endif";
+#endif
+        }";
         }
     }
 }

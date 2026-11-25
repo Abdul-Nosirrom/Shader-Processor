@@ -11,6 +11,10 @@ namespace FS.Shaders.Editor
     /// Resolves <c>#include</c> directives by inlining the referenced file contents,
     /// producing a "flattened" source string for parsing purposes.
     ///
+    /// ShaderParser runs it on the HLSLINCLUDE block and on every pass's HLSLPROGRAM.
+    /// Each pass starts from the set of files the HLSLINCLUDE already inlined (the
+    /// <c>visited</c> overload), since those are in front of every pass anyway.
+    ///
     /// The resolved source is only used for finding structs, functions, CBUFFERs, and
     /// pragmas during the parsing stage. The actual shader output keeps the original
     /// <c>#include</c> directives so the shader compiler handles them normally.

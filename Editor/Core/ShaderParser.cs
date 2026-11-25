@@ -40,6 +40,9 @@ namespace FS.Shaders.Editor
         static readonly Regex s_texture2DDetectRegex = new Regex(@"TEXTURE2D\s*\(", RegexOptions.Compiled);
         static readonly Regex s_structDetectRegex = new Regex(@"struct\s+\w+\s*\{", RegexOptions.Compiled);
         static readonly Regex s_hlslIncludeRegex = new Regex(@"^\s*HLSLINCLUDE\s*(.*?)\s*ENDHLSL", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.Multiline);
+        // Group 1 is the value: a mode name (Back/Off/Front) or a property reference ([_Cull]).
+        // Line-anchored so text like Name "Cull Test" can't match.
+        static readonly Regex s_cullRegex = new Regex(@"^[ \t]*Cull\s+(\[\s*\w+\s*\]|\w+)", RegexOptions.Compiled | RegexOptions.Multiline);
 
         //=============================================================================
         // Main Entry Point
@@ -54,6 +57,7 @@ namespace FS.Shaders.Editor
             ParsePropertiesBlock(ctx);
             ParseHlslInclude(ctx);
             ParseAllPasses(ctx);
+            ResolvePassIncludes(ctx);
             FindForwardPass(ctx);
             ExtractExtraFragmentParams(ctx);
 
@@ -62,7 +66,6 @@ namespace FS.Shaders.Editor
 
             // Parse from the appropriate location
             ParseCBuffer(ctx);
-            ParseTextures(ctx);
             ParseStructs(ctx);
             ParseHookPragmas(ctx);
 
@@ -79,6 +82,7 @@ namespace FS.Shaders.Editor
         {
             ctx.Passes.Clear();
             ParseAllPasses(ctx);
+            ResolvePassIncludes(ctx);
             FindForwardPass(ctx);
             ExtractExtraFragmentParams(ctx);
             ParsePerPassStructs(ctx);
@@ -128,10 +132,12 @@ namespace FS.Shaders.Editor
             // Resolve #include directives to produce a flattened version for parsing.
             // The raw HlslIncludeBlock is preserved for source modification operations.
             // The resolved version is only used for finding things (structs, functions, etc).
+            // The inlined files are remembered so pass include resolution can skip them.
+            ctx.HlslIncludeResolvedFiles.Clear();
             if (!string.IsNullOrEmpty(ctx.HlslIncludeBlock))
             {
                 ctx.ResolvedHlslInclude = ShaderIncludeResolver.Resolve(
-                    ctx.HlslIncludeBlock, ctx.ShaderDirectory);
+                    ctx.HlslIncludeBlock, ctx.ShaderDirectory, ctx.HlslIncludeResolvedFiles);
             }
             else
             {
@@ -165,44 +171,16 @@ namespace FS.Shaders.Editor
 
         static void ParseCBuffer(ShaderContext ctx)
         {
+            // Reads the forward pass as written, not with its includes inlined. A CBUFFER
+            // that lives in a file the pass includes already reaches every generated pass
+            // through the copied #include line, so parsing it here would make {{CBUFFER}}
+            // emit a second UnityPerMaterial block next to it.
             string source = ctx.CBufferInHlslInclude
                 ? (ctx.ResolvedHlslInclude ?? ctx.HlslIncludeBlock)
                 : ctx.ReferencePass?.HlslProgram;
             if (string.IsNullOrEmpty(source)) return;
 
             ctx.CBufferContent = ShaderBlockUtility.GetCBufferContent(source);
-        }
-
-        //=============================================================================
-        // Texture Parsing
-        //=============================================================================
-
-        static void ParseTextures(ShaderContext ctx)
-        {
-            string source = ctx.TexturesInHlslInclude
-                ? (ctx.ResolvedHlslInclude ?? ctx.HlslIncludeBlock)
-                : ctx.ReferencePass?.HlslProgram;
-            if (string.IsNullOrEmpty(source)) return;
-
-            // Match TEXTURE2D + SAMPLER pairs
-            var matches = Regex.Matches(source,
-                @"(TEXTURE2D|TEXTURE3D|TEXTURECUBE)\s*\(\s*(\w+)\s*\)\s*;\s*SAMPLER\s*\(\s*(\w+)\s*\)\s*;");
-
-            var added = new HashSet<string>();
-            foreach (Match match in matches)
-            {
-                string name = match.Groups[2].Value;
-                if (added.Add(name))
-                {
-                    ctx.Textures.Add(new TextureDeclaration
-                    {
-                        Type = match.Groups[1].Value,
-                        Name = name,
-                        SamplerName = match.Groups[3].Value,
-                        RawDeclaration = match.Value
-                    });
-                }
-            }
         }
 
         //=============================================================================
@@ -233,6 +211,26 @@ namespace FS.Shaders.Editor
                         ctx.Passes.Add(passInfo);
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Inline each pass's #includes into <see cref="PassInfo.ResolvedHlslProgram"/>,
+        /// the same way HLSLINCLUDE is resolved, so lookups can see structs, functions
+        /// and hooks that a pass gets from an included file. Each pass starts from its
+        /// own copy of the files HLSLINCLUDE already inlined: Unity compiles every pass
+        /// with the HLSLINCLUDE in front, so including one of those again adds nothing.
+        /// </summary>
+        static void ResolvePassIncludes(ShaderContext ctx)
+        {
+            foreach (var pass in ctx.Passes)
+            {
+                if (string.IsNullOrEmpty(pass.HlslProgram))
+                    continue;
+
+                var visited = new HashSet<string>(ctx.HlslIncludeResolvedFiles, StringComparer.OrdinalIgnoreCase);
+                pass.ResolvedHlslProgram = ShaderIncludeResolver.Resolve(
+                    pass.HlslProgram, ctx.ShaderDirectory, visited);
             }
         }
 
@@ -271,23 +269,59 @@ namespace FS.Shaders.Editor
                 pass.HlslProgram = hlslMatch.Groups[1].Value;
 
                 // Extract vertex/fragment function names
-                var vertexMatch = s_vertexPragmaRegex.Match(pass.HlslProgram);
-                if (vertexMatch.Success)
-                    pass.VertexFunctionName = vertexMatch.Groups[1].Value;
-
-                var fragmentMatch = s_fragmentPragmaRegex.Match(pass.HlslProgram);
-                if (fragmentMatch.Success)
-                    pass.FragmentFunctionName = fragmentMatch.Groups[1].Value;
+                pass.VertexFunctionName = FirstUncommentedPragmaValue(s_vertexPragmaRegex, pass.HlslProgram);
+                pass.FragmentFunctionName = FirstUncommentedPragmaValue(s_fragmentPragmaRegex, pass.HlslProgram);
             }
+
+            // Render state only lives in the ShaderLab part above the program, so stop
+            // there; HLSL code can't be mistaken for a Cull line that way.
+            int renderStateEnd = hlslMatch.Success ? hlslMatch.Index : passSource.Length;
+            pass.CullState = ParseCullState(passSource.Substring(0, renderStateEnd));
 
             return pass;
         }
 
+        /// <summary>
+        /// Value of the last uncommented "Cull X" line in a pass's ShaderLab section
+        /// ("Back", "Off", "Front", or a property reference like "[_Cull]"), or null
+        /// if there is none.
+        /// </summary>
+        static string ParseCullState(string renderStateSource)
+        {
+            string cullState = null;
+            foreach (Match match in s_cullRegex.Matches(renderStateSource))
+            {
+                if (ShaderBlockUtility.IsInComment(renderStateSource, match.Index))
+                    continue;
+
+                // Later lines win, same as ShaderLab
+                cullState = match.Groups[1].Value;
+            }
+            return cullState;
+        }
+
+        /// <summary>
+        /// Return the first capture of a pragma regex that isn't inside a comment.
+        /// A commented-out "// #pragma vertex OldVert" above the real pragma would
+        /// otherwise win and point the pipeline at the wrong function.
+        /// </summary>
+        static string FirstUncommentedPragmaValue(Regex pragmaRegex, string source)
+        {
+            foreach (Match match in pragmaRegex.Matches(source))
+            {
+                if (!ShaderBlockUtility.IsInComment(source, match.Index))
+                    return match.Groups[1].Value;
+            }
+            return null;
+        }
+
         static void FindForwardPass(ShaderContext ctx)
         {
-            // First check if ShaderGen is in SubShader tags
+            // First check if ShaderGen is in SubShader tags. Accepts the same value set
+            // as pass-level detection (IsTagEnabled) so "On"/"1"/etc behave consistently
+            // at both scopes and with the importer activation check.
             if (ctx.SubShaderTags.TryGetValue("ShaderGen", out string value) &&
-                value.Equals("True", StringComparison.OrdinalIgnoreCase))
+                ShaderTagUtility.IsTagEnabled(value))
             {
                 ctx.ShaderGenInSubShader = true;
             }
@@ -302,7 +336,7 @@ namespace FS.Shaders.Editor
                     ctx.ReferenceFragmentFunctionName = pass.FragmentFunctionName;
                     ctx.ShaderGenInPass = true;
                     ctx.ShaderGenPassName = pass.Name ?? pass.LightMode ?? "unnamed";
-                    Debug.Log($"[ShaderGen] Using tagged pass: {ctx.ShaderGenPassName}");
+                    ShaderGenLog.Info($"[ShaderGen] Using tagged pass: {ctx.ShaderGenPassName}");
                     return;
                 }
             }
@@ -322,7 +356,7 @@ namespace FS.Shaders.Editor
                     ctx.ReferencePass = pass;
                     ctx.ReferenceVertexFunctionName = pass.VertexFunctionName;
                     ctx.ReferenceFragmentFunctionName = pass.FragmentFunctionName;
-                    Debug.Log($"[ShaderGen] Using UniversalForward pass (SubShader fallback)");
+                    ShaderGenLog.Info("[ShaderGen] Using UniversalForward pass (SubShader fallback)");
                     return;
                 }
             }
@@ -335,7 +369,7 @@ namespace FS.Shaders.Editor
                     ctx.ReferencePass = pass;
                     ctx.ReferenceVertexFunctionName = pass.VertexFunctionName;
                     ctx.ReferenceFragmentFunctionName = pass.FragmentFunctionName;
-                    Debug.Log($"[ShaderGen] Using first pass as fallback: {pass.Name ?? pass.LightMode ?? "unnamed"}");
+                    ShaderGenLog.Info($"[ShaderGen] Using first pass as fallback: {pass.Name ?? pass.LightMode ?? "unnamed"}");
                     return;
                 }
             }
@@ -354,7 +388,9 @@ namespace FS.Shaders.Editor
             if (ctx.ReferencePass == null || string.IsNullOrEmpty(ctx.ReferenceFragmentFunctionName))
                 return;
 
-            string source = ctx.ReferencePass.HlslProgram;
+            // Search source rather than the raw pass, so a fragment function defined in
+            // an included file (or HLSLINCLUDE) still passes on its extra parameters
+            string source = ctx.BuildSearchSource(ctx.ReferencePass);
             string funcName = ctx.ReferenceFragmentFunctionName;
 
             // Match: returnType funcName(StructType paramName[, extra params...])
@@ -365,6 +401,11 @@ namespace FS.Shaders.Editor
 
             foreach (Match match in matches)
             {
+                // A comment like "never run Frag (no InjectForwardBody, no hooks)" matches
+                // the pattern and would hand ", no hooks" to every generated fragment
+                if (ShaderBlockUtility.IsInComment(source, match.Index))
+                    continue;
+
                 string extra = match.Groups[1].Value.Trim();
                 if (!string.IsNullOrEmpty(extra))
                 {
@@ -384,7 +425,7 @@ namespace FS.Shaders.Editor
             DetectStructNames(ctx);
 
             // Search in resolved source so we find structs in included files
-            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass?.HlslProgram);
+            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass);
 
             ctx.Attributes = ParseStruct(ctx.AttributesStructName, searchSource);
             ctx.Interpolators = ParseStruct(ctx.InterpolatorsStructName, searchSource);
@@ -395,7 +436,7 @@ namespace FS.Shaders.Editor
             if (ctx.ReferencePass == null || string.IsNullOrEmpty(ctx.ReferenceVertexFunctionName))
                 return;
 
-            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass.HlslProgram);
+            string searchSource = ctx.BuildSearchSource(ctx.ReferencePass);
             var types = ShaderFunctionUtility.GetSignatureTypes(searchSource, ctx.ReferenceVertexFunctionName);
             if (types != null)
             {
@@ -428,7 +469,7 @@ namespace FS.Shaders.Editor
         {
             foreach (var pass in ctx.Passes)
             {
-                string searchSource = ctx.BuildSearchSource(pass.HlslProgram);
+                string searchSource = ctx.BuildSearchSource(pass);
                 var types = ShaderFunctionUtility.GetSignatureTypes(searchSource, pass.VertexFunctionName);
 
                 if (types != null)
@@ -586,7 +627,7 @@ namespace FS.Shaders.Editor
         {
             if (ctx.ReferencePass == null) return;
 
-            string bodySearchSource = ctx.BuildSearchSource(ctx.ReferencePass.HlslProgram);
+            string bodySearchSource = ctx.BuildSearchSource(ctx.ReferencePass);
 
             // Scan for all registered hook pragmas
             foreach (var hook in ShaderHookRegistry.All)

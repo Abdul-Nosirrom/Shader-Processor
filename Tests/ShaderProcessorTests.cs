@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace FS.Shaders.Editor.Tests
 {
@@ -121,6 +122,19 @@ namespace FS.Shaders.Editor.Tests
         {
             return Regex.Matches(source, ShaderParser.PassPattern).Count;
         }
+
+        /// <summary>
+        /// Slice a generated pass from its Name line up to its ENDHLSL.
+        /// Fails the test if the pass isn't in the output.
+        /// </summary>
+        static string GetPassContent(string output, string passName)
+        {
+            int passIdx = output.IndexOf($"Name \"{passName}\"");
+            Assert.GreaterOrEqual(passIdx, 0, $"Missing {passName} pass");
+            int endHlsl = output.IndexOf("ENDHLSL", passIdx);
+            Assert.Greater(endHlsl, passIdx, $"{passName} pass has no ENDHLSL");
+            return output.Substring(passIdx, endHlsl - passIdx);
+        }
         
         //=============================================================================
         // Test 01: Structs in HLSLINCLUDE
@@ -149,7 +163,22 @@ namespace FS.Shaders.Editor.Tests
             Assert.IsTrue(output.Contains("struct DepthNormalsAttributes"), "Missing DepthNormalsAttributes");
             Assert.IsTrue(output.Contains("struct MotionVectorsAttributes"), "Missing MotionVectorsAttributes");
         }
-        
+
+        [Test]
+        public void Test01_DepthNormalsFallbackWritesSignedNormal()
+        {
+            // No InjectForwardBody here, so this is the template's own return line.
+            // URP writes signed normals into an SNorm target and SampleSceneNormals
+            // doesn't decode, so a [0,1] remap would disagree with URP Lit.
+            string output = ProcessTestShader("Test01_StructsInHLSLINCLUDE.shader");
+            string passContent = GetPassContent(output, "DepthNormals");
+
+            Assert.IsTrue(passContent.Contains("half4(NormalizeNormalPerPixel(input.normalWS), 0.0)"),
+                "DepthNormals template should write the signed normal with w = 0, like URP");
+            Assert.IsFalse(passContent.Contains("* 0.5 + 0.5"),
+                "DepthNormals must not remap normals to [0,1]");
+        }
+
         [Test]
         public void Test01_CBufferNotDuplicatedWhenInHLSLINCLUDE()
         {
@@ -169,15 +198,37 @@ namespace FS.Shaders.Editor.Tests
         public void Test01_TessFactorOverridePrefixed()
         {
             string output = ProcessTestShader("Test01_StructsInHLSLINCLUDE.shader");
-            
-            // Forward pass should use ForwardTessellationFactorOverride (or unprefixed in authored code)
-            // Generated passes should use prefixed names
+
+            // Generated passes should use prefixed names (their pass templates emit the
+            // renamed hook bodies via {{HOOK_FUNCTIONS}})
             Assert.IsTrue(output.Contains("DepthOnlyTessellationFactorOverride"),
                 "Missing prefixed tess factor override in DepthOnly");
             Assert.IsTrue(output.Contains("ShadowCasterTessellationFactorOverride"),
                 "Missing prefixed tess factor override in ShadowCaster");
         }
-        
+
+        [Test]
+        public void Test01_AuthoredPassTessFactorOverrideNotPrefixed()
+        {
+            string output = ProcessTestShader("Test01_StructsInHLSLINCLUDE.shader");
+
+            // The authored Forward pass keeps its original struct names, so the tess
+            // code injected into it must call the user's function under its original
+            // name. A pass-name prefixed call would reference a renamed function body
+            // that is never emitted (the Tessellation template has no HOOK_FUNCTIONS
+            // marker), producing an undefined identifier at compile time.
+            int fwdIdx = output.IndexOf("Name \"Forward\"");
+            Assert.IsTrue(fwdIdx >= 0, "Missing Forward pass");
+
+            int endHlsl = output.IndexOf("ENDHLSL", fwdIdx);
+            string fwdContent = output.Substring(fwdIdx, endHlsl - fwdIdx);
+
+            Assert.IsTrue(fwdContent.Contains("TessellationFactorOverride(_overrideFactor, input);"),
+                "Forward pass tess code should call the user's hook function");
+            Assert.IsFalse(fwdContent.Contains("ForwardTessellationFactorOverride"),
+                "Forward pass tess code must not use a pass-name prefixed hook call");
+        }
+
         //=============================================================================
         // Test 04: Comments Around Pass Keyword
         //=============================================================================
@@ -1107,10 +1158,24 @@ namespace FS.Shaders.Editor.Tests
             int endHlsl = output.IndexOf("ENDHLSL", passIdx);
             string passContent = output.Substring(passIdx, endHlsl - passIdx);
             
-            Assert.IsTrue(passContent.Contains("normalize(computedNormal)"),
+            Assert.IsTrue(passContent.Contains("NormalizeNormalPerPixel(computedNormal)"),
                 "DepthNormals should use 'computedNormal' from fragmentOutput:normal pragma");
         }
-        
+
+        [Test]
+        public void Test17_DepthNormalsWritesSignedNormal()
+        {
+            // The fragmentOutput:normal path goes through the injector's return
+            // expression, not the template line, so it needs its own check.
+            string output = ProcessTestShader("Test17_ForwardBodyInjection.shader");
+            string passContent = GetPassContent(output, "DepthNormals");
+
+            Assert.IsTrue(passContent.Contains("half4(NormalizeNormalPerPixel(computedNormal), 0.0)"),
+                "DepthNormals should write the signed computed normal with w = 0, like URP");
+            Assert.IsFalse(passContent.Contains("* 0.5 + 0.5"),
+                "DepthNormals must not remap normals to [0,1]");
+        }
+
         [Test]
         public void Test17_MetaVertexHasUVTransfer()
         {
@@ -1279,7 +1344,7 @@ namespace FS.Shaders.Editor.Tests
             string passContent = output.Substring(passIdx, endHlsl - passIdx);
             
             // Should use computed normal from pragma, with normalized input name
-            Assert.IsTrue(passContent.Contains("normalize(computedNormal)"),
+            Assert.IsTrue(passContent.Contains("NormalizeNormalPerPixel(computedNormal)"),
                 "DepthNormals should use 'computedNormal' from fragmentOutput:normal pragma");
             Assert.IsTrue(passContent.Contains("input.tangentWS"),
                 "DepthNormals fragment should use normalized 'input' name");
@@ -1545,6 +1610,50 @@ namespace FS.Shaders.Editor.Tests
             Assert.IsFalse(output.Contains("\"ExcludePasses\""),
                 "ExcludePasses is a directive, should not appear as a tag");
         }
+
+        // --- Full-pass child (Pass block with HLSLPROGRAM gets appended) ---
+
+        [Test]
+        public void Test19_FullPassChild_PassAppended()
+        {
+            string output = ResolveTestShader("Test19_InheritChild_FullPass.shader");
+
+            Assert.IsTrue(output.Contains("Name \"ChildExtra\""),
+                "Child full pass should be appended to the merged source");
+            Assert.IsTrue(output.Contains("ChildVert"),
+                "Child pass HLSL should be carried over intact");
+        }
+
+        [Test]
+        public void Test19_FullPassChild_ParentPassesRetained()
+        {
+            string output = ResolveTestShader("Test19_InheritChild_FullPass.shader");
+
+            Assert.IsTrue(output.Contains("Name \"Forward\""),
+                "Parent Forward pass should remain");
+            Assert.IsTrue(output.Contains("Name \"ExtraPass\""),
+                "Parent ExtraPass should remain");
+        }
+
+        [Test]
+        public void Test19_FullPassChild_PassInsideSubShader()
+        {
+            string output = ResolveTestShader("Test19_InheritChild_FullPass.shader");
+
+            // The appended pass must land inside the SubShader block, and the pass
+            // parser must be able to find it there.
+            var blocks = ShaderBlockUtility.FindAllPassBlocks(output);
+            bool found = false;
+            foreach (var block in blocks)
+            {
+                if (block.Content.Contains("\"ChildExtra\""))
+                {
+                    found = true;
+                    break;
+                }
+            }
+            Assert.IsTrue(found, "ChildExtra should parse as a proper Pass block in the merged source");
+        }
         
         //=============================================================================
         // Test 20: Parsing Utilities
@@ -1703,7 +1812,134 @@ float4 frag(Interpolators input) : SV_Target
             Assert.IsTrue(info.Value.Body.Contains("_Tint"),
                 "Should pick the longer (real) implementation, not the stub");
         }
-        
+
+        [Test]
+        public void Test20_PropertyExists_DoesNotMatchInsideLongerName()
+        {
+            var ctx = new ShaderContext
+            {
+                PropertiesBlock = "_TessellationFactor(\"Factor\", Range(1, 64)) = 16"
+            };
+
+            Assert.IsFalse(ctx.PropertyExists("_Tessellation"),
+                "_Tessellation must not match inside _TessellationFactor");
+            Assert.IsTrue(ctx.PropertyExists("_TessellationFactor"),
+                "Exact property name should match");
+        }
+
+        [Test]
+        public void Test20_CBufferEntryExists_DoesNotMatchInsideLongerName()
+        {
+            var ctx = new ShaderContext
+            {
+                CBufferContent = "float _TessellationFactor;"
+            };
+
+            Assert.IsFalse(ctx.CBufferEntryExists("_Tessellation"),
+                "_Tessellation must not match inside _TessellationFactor");
+            Assert.IsTrue(ctx.CBufferEntryExists("_TessellationFactor"),
+                "Exact entry name should match");
+        }
+
+        [Test]
+        public void Test20_PragmaGetValue_SkipsCommentedPragmas()
+        {
+            string source =
+                "// #pragma vertexDisplacement CommentedOut\n" +
+                "#pragma vertexDisplacement RealFunc\n";
+
+            Assert.AreEqual("RealFunc", ShaderPragmaUtility.GetValue(source, "vertexDisplacement"),
+                "Commented pragma should be skipped in favor of the real one");
+
+            string onlyCommented =
+                "// #pragma vertexDisplacement CommentedOut\n" +
+                "/* #pragma alphaClip AlsoOut */\n";
+
+            Assert.IsNull(ShaderPragmaUtility.GetValue(onlyCommented, "vertexDisplacement"),
+                "Line-commented pragma must not activate a hook");
+            Assert.IsNull(ShaderPragmaUtility.GetValue(onlyCommented, "alphaClip"),
+                "Block-commented pragma must not activate a hook");
+        }
+
+        [Test]
+        public void Test20_FragmentOutputs_SkipCommentedPragmas()
+        {
+            string source =
+                "// #pragma fragmentOutput:normal oldNormal\n" +
+                "#pragma fragmentOutput:albedo myAlbedo\n";
+
+            var outputs = ShaderPragmaUtility.ParseFragmentOutputs(source);
+
+            Assert.IsFalse(outputs.ContainsKey("normal"),
+                "Commented fragmentOutput pragma must be ignored");
+            Assert.AreEqual("myAlbedo", outputs["albedo"]);
+        }
+
+        [Test]
+        public void Test20_InsertBeforeCBufferEnd_TargetsUnityPerMaterialOnly()
+        {
+            string source =
+                "CBUFFER_START(OtherBuffer)\nfloat _Other;\nCBUFFER_END\n" +
+                "CBUFFER_START(UnityPerMaterial)\nfloat _Base;\nCBUFFER_END\n";
+
+            string result = ShaderBlockUtility.InsertBeforeCBufferEnd(source, "float _Injected;\n");
+
+            Assert.IsNotNull(result, "UnityPerMaterial block exists, insertion should succeed");
+
+            // The first CBUFFER_END in the result belongs to OtherBuffer. The injected
+            // entry must appear after it (inside the UnityPerMaterial block instead).
+            int otherEnd = result.IndexOf("CBUFFER_END");
+            int injected = result.IndexOf("_Injected");
+            Assert.IsTrue(injected > otherEnd,
+                "Entries must go into the UnityPerMaterial block, not the first CBUFFER in the file");
+        }
+
+        [Test]
+        public void Test20_InsertBeforeCBufferEnd_InsertsIntoEveryUnityPerMaterialBlock()
+        {
+            // Pass-local CBUFFERs must stay identical across passes for the SRP batcher,
+            // so processor entries go into every UnityPerMaterial block.
+            string source =
+                "CBUFFER_START(UnityPerMaterial)\nfloat _A;\nCBUFFER_END\n" +
+                "CBUFFER_START(UnityPerMaterial)\nfloat _B;\nCBUFFER_END\n";
+
+            string result = ShaderBlockUtility.InsertBeforeCBufferEnd(source, "float _Injected;\n");
+
+            Assert.AreEqual(2, CountOccurrences(result, "_Injected"),
+                "Both UnityPerMaterial blocks should receive the entries");
+        }
+
+        [Test]
+        public void Test20_IsInComment_SlashStarInsideLineCommentDoesNotOpenBlock()
+        {
+            // "// see Assets/Shaders/* for examples" contains a /* with no later */.
+            // Treating it as a live block opener makes everything below the line read
+            // as commented out, which at the importer activation callsite silently
+            // unhooks the shader from the pipeline.
+            string source =
+                "// see Assets/Shaders/* for examples\n" +
+                "\"ShaderGen\" = \"True\"\n";
+
+            int tagIdx = source.IndexOf("\"ShaderGen\"");
+            Assert.IsFalse(ShaderBlockUtility.IsInComment(source, tagIdx),
+                "A /* inside a // line comment must not open a block comment");
+        }
+
+        [Test]
+        public void Test20_IsInComment_RealBlockCommentsStillDetected()
+        {
+            string source = "/* open\ninside\n*/ after";
+
+            Assert.IsTrue(ShaderBlockUtility.IsInComment(source, source.IndexOf("inside")),
+                "Position inside an open block comment should be detected");
+            Assert.IsFalse(ShaderBlockUtility.IsInComment(source, source.IndexOf("after")),
+                "Position after a closed block comment should not be flagged");
+
+            string unclosed = "// dead /*\n/* live opener\ntarget";
+            Assert.IsTrue(ShaderBlockUtility.IsInComment(unclosed, unclosed.IndexOf("target")),
+                "A live unclosed opener after a dead one should still comment out what follows");
+        }
+
         //=============================================================================
         // Test 21: Include Resolution
         //=============================================================================
@@ -1857,31 +2093,551 @@ float4 frag(Interpolators input) : SV_Target
             Assert.IsTrue(search.Contains("_RawVar"),
                 "Should fall back to HlslIncludeBlock when ResolvedHlslInclude is null");
         }
-        
+
         //=============================================================================
-        // Test Compiling: Test that all the shaders compile correctly
+        // Test 22: Conditional and Multi-Line Defines
+        //
+        // Defines get hoisted above the CBUFFER/structs in generated passes. They
+        // have to keep the #ifdef/#else they were written under, and a define
+        // spanning several lines has to move as one unit. The compile test covers
+        // the end result; these pin down where the lines land.
         //=============================================================================
-        static string[] AllTestShaders = new[]
+
+        /// <summary>
+        /// The part of a generated pass above its Attributes struct, where the
+        /// hoisted preprocessor lines go. Test22 keeps CBUFFER and textures in
+        /// HLSLINCLUDE, so nothing else sits between them.
+        /// </summary>
+        static string GetHoistedRegion(string passContent, string passName)
         {
-            "Test01_StructsInHLSLINCLUDE.shader",
-            "Test02_VertexFuncInHLSLINCLUDE.shader",
-            // ... all of them
-            "Test18_ForwardBodyInjection_CustomVarNames.shader",
-            "Test19_InheritParent.shader",
-            // Test21 shaders excluded: they use relative #include paths that
-            // can't resolve via ShaderUtil.CreateShaderAsset (no file context).
-            // They compile correctly when imported from disk via FSShaderImporter.
-        };
+            int structIdx = passContent.IndexOf($"struct {passName}Attributes");
+            Assert.Greater(structIdx, 0, $"{passName} pass has no {passName}Attributes struct");
+            return passContent.Substring(0, structIdx);
+        }
 
         [Test]
-        public void AllTestShaders_CompileWithoutErrors([ValueSource(nameof(AllTestShaders))] string testFile)
+        public void Test22_HoistedDefineKeepsGuard()
         {
-            // TODO: May need to wait a frame or trigger compilation somehow, not working as is
+            string output = ProcessTestShader("Test22_ConditionalDefines.shader");
+            string hoisted = GetHoistedRegion(GetPassContent(output, "DepthOnly"), "DepthOnly");
+
+            // Each search starts where the previous one landed. The template has its own
+            // conditional blocks above the hoisted lines (the LOD crossfade include), and
+            // their #else/#endif must not be mistaken for this block's.
+            int ifdefIdx = hoisted.IndexOf("#ifdef FS_TEST_GUARD");
+            Assert.GreaterOrEqual(ifdefIdx, 0, "#ifdef FS_TEST_GUARD should be mirrored above the structs");
+
+            int onDefineIdx = hoisted.IndexOf("#define TEST_SCALE(x) ( \\", ifdefIdx);
+            int elseIdx = onDefineIdx >= 0 ? hoisted.IndexOf("#else", onDefineIdx) : -1;
+            int offDefineIdx = elseIdx >= 0 ? hoisted.IndexOf("test_else_branch_must_not_compile", elseIdx) : -1;
+            int endifIdx = offDefineIdx >= 0 ? hoisted.IndexOf("#endif", offDefineIdx) : -1;
+
+            Assert.Greater(onDefineIdx, ifdefIdx, "The 'on' TEST_SCALE should sit inside #ifdef FS_TEST_GUARD");
+            Assert.Greater(elseIdx, onDefineIdx, "#else should follow the 'on' TEST_SCALE");
+            Assert.Greater(offDefineIdx, elseIdx, "The 'off' TEST_SCALE should sit inside the #else");
+            Assert.Greater(endifIdx, offDefineIdx, "#endif should close the block after the 'off' TEST_SCALE");
+        }
+
+        [Test]
+        public void Test22_MultiLineDefineStaysTogether()
+        {
+            string output = ProcessTestShader("Test22_ConditionalDefines.shader");
+            string passContent = GetPassContent(output, "DepthOnly");
+            string hoisted = GetHoistedRegion(passContent, "DepthOnly");
+
+            // "TestGuardHelper(x) * 2.0" only appears on the define's continuation line
+            // (the helper's own declaration reads "TestGuardHelper(float x)")
+            Assert.AreEqual(1, CountOccurrences(passContent, "TestGuardHelper(x) * 2.0"),
+                "The define's continuation line should appear exactly once in the pass");
+            Assert.IsTrue(hoisted.Contains("TestGuardHelper(x) * 2.0"),
+                "The define's continuation line should be hoisted with its #define");
+            Assert.IsTrue(hoisted.Contains("+ 0.0)"),
+                "The define's last line should be hoisted with its #define");
+            Assert.IsFalse(hoisted.Contains("\\\r"),
+                "A '\\' followed by a carriage return may not splice; continuations should end in '\\' + newline");
+        }
+
+        [Test]
+        public void Test22_GuardedHelperStaysInCode()
+        {
+            string output = ProcessTestShader("Test22_ConditionalDefines.shader");
+            string passContent = GetPassContent(output, "DepthOnly");
+            string hoisted = GetHoistedRegion(passContent, "DepthOnly");
+
+            int helperIdx = passContent.IndexOf("float TestGuardHelper(float x)");
+            Assert.Greater(helperIdx, hoisted.Length,
+                "The guarded helper function is code and should stay below the structs");
+
+            // Its own #ifdef must come along so it's still conditional down there
+            int codeIfdefIdx = passContent.LastIndexOf("#ifdef FS_TEST_GUARD", helperIdx);
+            Assert.Greater(codeIfdefIdx, hoisted.Length,
+                "The helper's #ifdef FS_TEST_GUARD should also be kept in the code section");
+        }
+
+        //=============================================================================
+        // Test 23: Generated Passes Cull Like the Forward Pass
+        //
+        // ShadowCaster, DepthOnly, DepthNormals and MotionVectors copy the reference
+        // pass's Cull line through {{CULL}}. With no Cull line on the reference pass
+        // they get none, and inherit the SubShader's state like the forward pass does.
+        //=============================================================================
+
+        static readonly string[] s_cullFollowingPasses = { "ShadowCaster", "DepthOnly", "DepthNormals", "MotionVectors" };
+
+        [Test]
+        public void Test23_GeneratedPassesCopyForwardCull()
+        {
+            string output = ProcessTestShader("Test23_CullFromForward.shader");
+
+            foreach (string passName in s_cullFollowingPasses)
+            {
+                string passContent = GetPassContent(output, passName);
+                Assert.IsTrue(passContent.Contains("Cull [_Cull]"),
+                    $"{passName} should copy the forward pass's 'Cull [_Cull]'");
+                Assert.IsFalse(Regex.IsMatch(passContent, @"(?m)^\s*Cull Back"),
+                    $"{passName} should not hard-code Cull Back");
+            }
+        }
+
+        [Test]
+        public void Test23_MetaKeepsCullOff()
+        {
+            // Meta's culling is part of the technique (lightmap UV space), not copied
+            string output = ProcessTestShader("Test23_CullFromForward.shader");
+            Assert.IsTrue(GetPassContent(output, "Meta").Contains("Cull Off"),
+                "Meta should keep its own Cull Off");
+        }
+
+        [Test]
+        public void Test01_NoForwardCullMeansNoGeneratedCull()
+        {
+            // Test01's forward pass has no Cull line, so the generated passes must not
+            // add one: they inherit the SubShader's state, as the forward pass does
+            string output = ProcessTestShader("Test01_StructsInHLSLINCLUDE.shader");
+
+            foreach (string passName in s_cullFollowingPasses)
+            {
+                Assert.IsFalse(Regex.IsMatch(GetPassContent(output, passName), @"(?m)^\s*Cull\b"),
+                    $"{passName} should have no Cull line when the forward pass has none");
+            }
+        }
+
+        //=============================================================================
+        // Generated pass details that follow URP 17
+        //=============================================================================
+
+        [Test]
+        public void Test01_ShadowCasterAppliesShadowClamping()
+        {
+            // URP's ShadowCasterPass clamps the biased clip position so casters behind
+            // the near plane still land in the shadow map (directional lights)
+            string output = ProcessTestShader("Test01_StructsInHLSLINCLUDE.shader");
+            Assert.IsTrue(GetPassContent(output, "ShadowCaster").Contains("ApplyShadowClamping("),
+                "ShadowCaster should apply ApplyShadowClamping like URP's ShadowCasterPass");
+        }
+
+        [Test]
+        public void Test01_MotionVectorsUsesShaderFeatureForPrecomputedVelocity()
+        {
+            // Matches URP Lit. multi_compile would build the Alembic variant for every
+            // shader whether a material uses it or not. The pragma lives in the keyword
+            // file the template includes, so check both halves.
+            string output = ProcessTestShader("Test01_StructsInHLSLINCLUDE.shader");
+            string passContent = GetPassContent(output, "MotionVectors");
+
+            Assert.IsTrue(passContent.Contains("#include_with_pragmas \"Packages/com.abdulal.shaderprocessor/Shaders/Keywords/MotionVectorsKeywords.hlsl\""),
+                "MotionVectors should include its keyword file");
+
+            string keywordsPath = Path.Combine(Path.GetDirectoryName(FindTestsDirectory()),
+                "Shaders", "Keywords", "MotionVectorsKeywords.hlsl");
+            string keywords = File.ReadAllText(keywordsPath);
+            Assert.IsTrue(keywords.Contains("#pragma shader_feature_local_vertex _ADD_PRECOMPUTED_VELOCITY"),
+                "MotionVectorsKeywords.hlsl should declare _ADD_PRECOMPUTED_VELOCITY with shader_feature_local_vertex");
+            Assert.IsFalse(keywords.Contains("multi_compile _ _ADD_PRECOMPUTED_VELOCITY"),
+                "MotionVectorsKeywords.hlsl should not multi_compile _ADD_PRECOMPUTED_VELOCITY");
+        }
+
+        //=============================================================================
+        // Small fixes: tag case, template marker cleanup
+        //=============================================================================
+
+        [Test]
+        public void Test11_SubShaderShaderGenTagIsCaseInsensitive()
+        {
+            // The importer activates on any casing of the tag, so the pipeline must
+            // see it too. Test11 has ShaderGen at SubShader level only, which is the
+            // lookup that used to be case-sensitive.
+            string testsDir = FindTestsDirectory();
+            string path = Path.Combine(testsDir, "Test11_ShaderGenSubShaderLevel.shader");
+            string source = File.ReadAllText(path);
+            Assert.IsTrue(source.Contains("\"ShaderGen\""), "Test11 should declare a ShaderGen tag");
+
+            string output = _processor.Process(source.Replace("\"ShaderGen\"", "\"shadergen\""), path);
+
+            Assert.IsTrue(output.Contains("Name \"DepthNormals\""),
+                "A lowercase SubShader-level shadergen tag should still generate passes");
+        }
+
+        [Test]
+        public void TemplateEngine_MarkerCleanupKeepsBraceInitializers()
+        {
+            // Unreplaced markers are stripped after substitution, when replacement
+            // values (user code) are already in the text. Only the marker shape may go.
+            var replacements = new System.Collections.Generic.Dictionary<string, string> { ["X"] = "x" };
+            string result = TemplateEngine.Process("a {{X}} {{Y}} {{1,2}}", replacements);
+
+            Assert.AreEqual("a x  {{1,2}}", result,
+                "Only unreplaced {{MARKER}} names should be stripped, not brace initializers");
+        }
+
+        //=============================================================================
+        // Test 24: Child Property Declarations Reach Every Material CBUFFER
+        //=============================================================================
+
+        [Test]
+        public void Test24_NewPropertiesDeclaredInEveryMaterialCBuffer()
+        {
+            string merged = ResolveTestShader("Test24_InheritChild_PassCBuffers.shader");
+
+            // One per pass-local UnityPerMaterial block
+            Assert.AreEqual(2, CountOccurrences(merged, "float _Test24Scale;"),
+                "The new scalar should be declared in both UnityPerMaterial CBUFFERs");
+            Assert.AreEqual(2, CountOccurrences(merged, "float4 _Test24Tex_ST;"),
+                "The new texture's _ST should be declared in both UnityPerMaterial CBUFFERs");
+            Assert.AreEqual(2, CountOccurrences(merged, "TEXTURE2D(_Test24Tex);"),
+                "The new texture should be declared after both UnityPerMaterial CBUFFERs");
+            Assert.AreEqual(2, CountOccurrences(merged, "SAMPLER(sampler_Test24Tex);"),
+                "The new sampler should be declared after both UnityPerMaterial CBUFFERs");
+        }
+
+        [Test]
+        public void Test24_OtherCBuffersAndCommentsUntouched()
+        {
+            string merged = ResolveTestShader("Test24_InheritChild_PassCBuffers.shader");
+
+            // The trap CBUFFER in HLSLINCLUDE comes before both material blocks
+            int otherStart = merged.IndexOf("CBUFFER_START(Test24Other)");
+            Assert.Greater(otherStart, 0, "Test24Other CBUFFER should still be there");
+            int otherEnd = merged.IndexOf("CBUFFER_END", otherStart);
+            string otherBlock = merged.Substring(otherStart, otherEnd - otherStart);
+            Assert.IsFalse(otherBlock.Contains("_Test24Scale"),
+                "A CBUFFER that isn't UnityPerMaterial must not receive the child's entries");
+
+            // The header comment mentions CBUFFER_START(UnityPerMaterial) and CBUFFER_END
+            int shaderKeyword = merged.IndexOf("Shader \"Tests/24_InheritChild_PassCBuffers\"");
+            Assert.Greater(shaderKeyword, 0, "Merged shader should carry the child's name");
+            Assert.IsFalse(merged.Substring(0, shaderKeyword).Contains("_Test24"),
+                "Nothing should be inserted into the header comment");
+        }
+
+        //=============================================================================
+        // Test 25: A Child's "../" Include Resolves From the Child's Folder
+        //=============================================================================
+
+        const string TEST25_CHILD = "Test25_Sub/Test25_InheritChild_RelInclude.shader";
+
+        [Test]
+        public void Test25_ChildRelativeIncludeUsesChildFolder()
+        {
+            string merged = ResolveTestShader(TEST25_CHILD);
+
+            Assert.IsTrue(merged.Contains("#include \"Packages/com.abdulal.shaderprocessor/Tests/Test25_ChildInclude.hlsl\""),
+                "The child's ../ include should resolve against the child's folder (Tests/Test25_Sub)");
+            Assert.IsFalse(merged.Contains("../Test25_ChildInclude.hlsl"),
+                "No relative include should be left in the merged source");
+        }
+
+        [Test]
+        public void Test25_ChildWithRelativeIncludeCompiles()
+        {
+            // Not covered by the enumerated compile tests, which only look in Tests/ itself
+            string output = ResolveAndProcessTestShader(TEST25_CHILD);
+            AssertCompiles(output, TEST25_CHILD);
+        }
+
+        //=============================================================================
+        // Test 26: Pass-Level Includes
+        //
+        // Lookups (structs, vertex/fragment functions, hooks, extra fragment params)
+        // see files a pass #includes inside HLSLPROGRAM, not just HLSLINCLUDE ones.
+        // Both shaders are also covered by the enumerated compile test: their includes
+        // use package paths, which CreateShaderAsset can resolve.
+        //=============================================================================
+
+        [Test]
+        public void Test26_StructsFromPassIncludeUsedForGeneratedStructs()
+        {
+            string output = ProcessTestShader("Test26_PassIncludeStructs.shader");
+            string depthOnly = GetPassContent(output, "DepthOnly");
+
+            // positionWS only exists in the include's Interpolators, not in the
+            // fallback struct the generator falls back to when it finds nothing
+            Assert.IsTrue(depthOnly.Contains("struct DepthOnlyInterpolators"),
+                "DepthOnly should generate its interpolators struct");
+            Assert.IsTrue(depthOnly.Contains("positionWS : TEXCOORD1"),
+                "Generated interpolators should copy the fields of the included Interpolators struct");
+        }
+
+        [Test]
+        public void Test26_MaterialDataFromPassIncludeNotEmittedAgain()
+        {
+            // The CBUFFER and textures live in the included file. Generated passes get
+            // the forward pass's #include lines, so emitting them as well would declare
+            // UnityPerMaterial and _BaseMap twice.
+            string output = ProcessTestShader("Test26_PassIncludeStructs.shader");
+
+            Assert.AreEqual(0, CountOccurrences(output, "CBUFFER_START(UnityPerMaterial)"),
+                "No pass should emit its own UnityPerMaterial CBUFFER");
+            Assert.AreEqual(0, CountOccurrences(output, "TEXTURE2D(_BaseMap)"),
+                "No pass should emit its own _BaseMap declaration");
+        }
+
+        [Test]
+        public void Test26_HookFunctionFromPassIncludeIsCalled()
+        {
+            string output = ProcessTestShader("Test26_PassIncludeFunctions.shader");
+
+            Assert.IsTrue(GetPassContent(output, "DepthOnly").Contains("DepthOnlyTest26Displace("),
+                "DepthOnly should call its prefixed copy of the included hook");
+            Assert.IsTrue(GetPassContent(output, "ShadowCaster").Contains("ShadowCasterTest26Displace("),
+                "ShadowCaster should call its prefixed copy of the included hook");
+        }
+
+        [Test]
+        public void Test26_ForwardBodiesFromPassIncludeAreInjected()
+        {
+            string depthOnly = GetPassContent(
+                ProcessTestShader("Test26_PassIncludeFunctions.shader"), "DepthOnly");
+
+            Assert.IsTrue(depthOnly.Contains("output.positionWS = TransformObjectToWorld"),
+                "The included vertex function's body should be injected into DepthOnlyVertex");
+            Assert.IsTrue(depthOnly.Contains("faceShade"),
+                "The included fragment function's body should be injected into DepthOnlyFragment");
+        }
+
+        [Test]
+        public void Test26_ExtraFragmentParamFromPassIncludeIsKept()
+        {
+            string depthOnly = GetPassContent(
+                ProcessTestShader("Test26_PassIncludeFunctions.shader"), "DepthOnly");
+
+            Assert.IsTrue(depthOnly.Contains("input, bool isFrontFace : SV_IsFrontFace)"),
+                "DepthOnlyFragment should take the SV_IsFrontFace parameter the injected body reads");
+        }
+
+        [Test]
+        public void Test26_PassIncludeSkipsFilesHlslIncludeAlreadyInlined()
+        {
+            const string sharedInclude =
+                "#include \"Packages/com.abdulal.shaderprocessor/Tests/Test21_SharedInclude.hlsl\"";
+            string source =
+                "Shader \"Tests/26_Unit\" { SubShader { Tags { \"ShaderGen\" = \"True\" }\n" +
+                "HLSLINCLUDE\n" + sharedInclude + "\nENDHLSL\n" +
+                "Pass { Name \"Forward\" Tags { \"LightMode\" = \"UniversalForward\" }\n" +
+                "HLSLPROGRAM\n" +
+                "#pragma vertex vert\n" +
+                "#pragma fragment frag\n" +
+                sharedInclude + "\n" +
+                "#include \"Packages/com.abdulal.shaderprocessor/Tests/Test26_PassFunctions.hlsl\"\n" +
+                "ENDHLSL } } }";
+
+            var ctx = new ShaderContext { ProcessedSource = source, ShaderPath = "", ShaderDirectory = "" };
+            ShaderParser.Parse(ctx);
+
+            Assert.AreEqual(1, ctx.Passes.Count, "Expected the one authored pass");
+            PassInfo pass = ctx.Passes[0];
+            string search = ctx.BuildSearchSource(pass);
+
+            Assert.AreEqual(1, CountOccurrences(search, "struct Attributes"),
+                "A file the HLSLINCLUDE already inlined shouldn't be inlined again for the pass");
+            Assert.IsTrue(search.Contains("void Test26Displace"),
+                "A file only the pass includes should be inlined into its search source");
+            Assert.IsFalse(pass.HlslProgram.Contains("void Test26Displace"),
+                "The pass's own program text should keep its #include lines as written");
+        }
+
+        //=============================================================================
+        // Compilation: every test shader must produce compilable output
+        //=============================================================================
+
+        /// <summary>
+        /// Enumerate test shaders for the standalone compile test, so new test shaders
+        /// are covered automatically instead of via a hand-maintained list.
+        ///
+        /// Exclusions:
+        /// - Test21 shaders use relative #include paths that can't resolve via
+        ///   ShaderUtil.CreateShaderAsset (no file context). They compile correctly
+        ///   when imported from disk via FSShaderImporter.
+        /// - InheritChild shaders need the inheritance pre-pass first; they're covered
+        ///   by InheritanceChildShaders_CompileWithoutErrors below.
+        /// </summary>
+        static string[] CompilableTestShaders()
+        {
+            string testsDir = FindTestsDirectory();
+            if (testsDir == null) return new string[0];
+
+            var results = new System.Collections.Generic.List<string>();
+            foreach (string path in Directory.GetFiles(testsDir, "Test*.shader"))
+            {
+                string name = Path.GetFileName(path);
+                if (name.StartsWith("Test21")) continue;
+                if (name.Contains("InheritChild")) continue;
+                results.Add(name);
+            }
+            results.Sort();
+            return results.ToArray();
+        }
+
+        /// <summary>Inheritance child shaders, compiled after the inheritance pre-pass.</summary>
+        static string[] InheritanceChildShaders()
+        {
+            string testsDir = FindTestsDirectory();
+            if (testsDir == null) return new string[0];
+
+            var results = new System.Collections.Generic.List<string>();
+            foreach (string path in Directory.GetFiles(testsDir, "Test*.shader"))
+            {
+                string name = Path.GetFileName(path);
+                if (name.Contains("InheritChild"))
+                    results.Add(name);
+            }
+            results.Sort();
+            return results.ToArray();
+        }
+
+        [Test]
+        public void AllTestShaders_CompileWithoutErrors([ValueSource(nameof(CompilableTestShaders))] string testFile)
+        {
             string output = ProcessTestShader(testFile);
-            Shader shader = ShaderUtil.CreateShaderAsset(output, false);
-            Assert.IsFalse(ShaderUtil.ShaderHasError(shader),
-                $"{testFile} has compilation errors after processing");
-            UnityEngine.Object.DestroyImmediate(shader);
+            AssertCompiles(output, testFile);
+        }
+
+        [Test]
+        public void InheritanceChildShaders_CompileWithoutErrors([ValueSource(nameof(InheritanceChildShaders))] string testFile)
+        {
+            string output = ResolveAndProcessTestShader(testFile);
+            AssertCompiles(output, testFile);
+        }
+
+        [Test]
+        public void CompileTestEnumeration_FindsTestShaders()
+        {
+            // An empty [ValueSource] produces zero test cases and reads as a green
+            // suite, so a broken FindTestsDirectory would silently disable every
+            // compile test above. Fail loudly instead.
+            Assert.Greater(CompilableTestShaders().Length, 0,
+                "Compile-test enumeration found no shaders - FindTestsDirectory is broken " +
+                "and the compile tests are passing vacuously");
+            Assert.Greater(InheritanceChildShaders().Length, 0,
+                "Inheritance compile-test enumeration found no child shaders");
+        }
+
+        [Test]
+        public void AssertCompiles_FailsOnBrokenHlsl()
+        {
+            // Negative control: proves the compile harness can actually fail. If THIS
+            // test fails, AssertCompiles is not surfacing HLSL errors in this editor
+            // version and every compile test above is passing vacuously. This happened
+            // once already, when CreateShaderAsset + ShaderHasError stopped reporting
+            // errors with async shader compilation on (fixed by the synchronous
+            // per-pass compile in AssertCompiles). Next fallback is to import the test
+            // shaders through FSShaderImporter.
+            //
+            // The shader compiler also logs each error to the console, and the test
+            // framework fails any test that logs an error it wasn't told to expect.
+            // Those logs are the point here, so they're ignored. The count varies
+            // (one per message per compile), which rules out LogAssert.Expect. The
+            // test framework resets this flag for every test, so it only covers this one.
+            LogAssert.ignoreFailingMessages = true;
+
+            string broken = @"Shader ""Tests/CanaryBroken""
+{
+    SubShader
+    {
+        Pass
+        {
+            HLSLPROGRAM
+            #pragma vertex Vert
+            #pragma fragment Frag
+
+            #include ""Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl""
+
+            struct Attributes { float4 positionOS : POSITION; };
+            struct Interpolators { float4 positionCS : SV_POSITION; };
+
+            Interpolators Vert(Attributes input)
+            {
+                Interpolators output = (Interpolators)0;
+                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                return output;
+            }
+
+            half4 Frag(Interpolators input) : SV_Target
+            {
+                return undefined_symbol_that_cannot_compile;
+            }
+            ENDHLSL
+        }
+    }
+}";
+            Assert.Throws<AssertionException>(() => AssertCompiles(broken, "CanaryBroken"),
+                "AssertCompiles accepted deliberately broken HLSL - the compile harness cannot catch shader errors");
+        }
+
+        /// <summary>
+        /// Create a shader from processed source and assert it has no compile errors.
+        ///
+        /// CreateShaderAsset alone isn't enough: with the project's asynchronous shader
+        /// compilation on, it can return before anything is compiled, ShaderHasError only
+        /// reads cached messages, and the canary below passed broken HLSL as clean. So
+        /// async compilation is switched off for the duration and every pass is compiled
+        /// synchronously through a material before the messages are read.
+        ///
+        /// The material has no keywords enabled, so this validates ShaderLab plus the
+        /// default-keyword variant of each pass. Keyword-gated code (e.g. the
+        /// _TESSELLATION block) is only compiled in variants where the keyword is on,
+        /// so it isn't covered.
+        /// </summary>
+        static void AssertCompiles(string processedSource, string testFile)
+        {
+            bool wasAsyncAllowed = ShaderUtil.allowAsyncCompilation;
+            ShaderUtil.allowAsyncCompilation = false;
+
+            Shader shader = null;
+            Material material = null;
+            try
+            {
+                shader = ShaderUtil.CreateShaderAsset(processedSource, true);
+                Assert.IsNotNull(shader, $"{testFile}: CreateShaderAsset returned null");
+
+                material = new Material(shader);
+                for (int pass = 0; pass < shader.passCount; pass++)
+                {
+                    ShaderUtil.CompilePass(material, pass, forceSync: true);
+                }
+
+                bool hasError = ShaderUtil.ShaderHasError(shader);
+                string details = "";
+
+                var messages = ShaderUtil.GetShaderMessages(shader);
+                foreach (var message in messages)
+                {
+                    if (message.severity == UnityEditor.Rendering.ShaderCompilerMessageSeverity.Error)
+                        hasError = true;
+                    details += $"\n[{message.severity}] line {message.line}: {message.message}";
+                }
+
+                Assert.IsFalse(hasError, $"{testFile} failed to compile after processing:{details}");
+            }
+            finally
+            {
+                if (material != null)
+                    UnityEngine.Object.DestroyImmediate(material);
+                if (shader != null)
+                    UnityEngine.Object.DestroyImmediate(shader);
+
+                ShaderUtil.allowAsyncCompilation = wasAsyncAllowed;
+            }
         }
     }
 }

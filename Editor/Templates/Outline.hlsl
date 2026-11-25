@@ -16,7 +16,11 @@ Pass
     #pragma fragment OutlineFragment
     
     #pragma shader_feature_local _ENABLE_OUTLINES
-    
+
+    // An ordinary draw, so it needs instancing like the forward pass. The forward
+    // lighting keywords gate themselves out on SHADERGEN_GENERATED_PASS.
+    #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/DOTSInstancing.hlsl"
+
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     
     // -------------------------------------------------------------------------
@@ -28,7 +32,6 @@ Pass
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
-    {{TEXTURES}}
     
     // -------------------------------------------------------------------------
     // Structs

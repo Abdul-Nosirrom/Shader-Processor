@@ -3,7 +3,8 @@
 // =============================================================================
 // DEPTH_NORMALS_KEYWORDS.HLSL
 // Keywords for the DepthNormals pass.
-// Use: #include_with_pragmas "Library/Keywords/DepthNormalsKeywords.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/DepthNormalsKeywords.hlsl"
+// The ShaderGen DepthNormals template includes this, so generated passes get it already.
 // =============================================================================
 
 #pragma target 4.5
@@ -18,9 +19,11 @@
 // -----------------------------------------------------------------------------
 // Rendering Layers Output
 // -----------------------------------------------------------------------------
-// Writes mesh rendering layer to separate render target
-#pragma multi_compile_fragment _ _WRITE_RENDERING_LAYERS
-#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
+// Writes mesh rendering layer to separate render target. Off because the generated
+// DepthNormals pass only has one SV_Target, so these variants would write nothing.
+// Turning it on means adding the second output to the DepthNormals template.
+// #pragma multi_compile_fragment _ _WRITE_RENDERING_LAYERS
+// #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
 
 // -----------------------------------------------------------------------------
 // LOD Crossfade

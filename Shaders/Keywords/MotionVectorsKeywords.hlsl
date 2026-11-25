@@ -3,7 +3,8 @@
 // =============================================================================
 // MOTION_VECTORS_KEYWORDS.HLSL
 // Keywords for the MotionVectors pass.
-// Use: #include_with_pragmas "Library/Keywords/MotionVectorsKeywords.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/MotionVectorsKeywords.hlsl"
+// The ShaderGen MotionVectors template includes this, so generated passes get it already.
 // =============================================================================
 
 #pragma target 4.5

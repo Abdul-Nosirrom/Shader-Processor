@@ -19,15 +19,24 @@ namespace FS.Shaders.Editor
         /// <summary>
         /// Get the first argument value of a pragma directive.
         /// For <c>#pragma vertex Vert</c>, GetValue(source, "vertex") returns "Vert".
-        /// Returns null if the pragma is not found.
+        /// Commented-out pragmas are skipped, so <c>// #pragma alphaClip Old</c> doesn't
+        /// activate anything. Returns null if no uncommented pragma is found.
         /// </summary>
         public static string GetValue(string source, string pragmaName)
         {
             if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(pragmaName))
                 return null;
 
-            var match = Regex.Match(source, $@"#pragma\s+{Regex.Escape(pragmaName)}\s+(\w+)");
-            return match.Success ? match.Groups[1].Value : null;
+            var matches = Regex.Matches(source, $@"#pragma\s+{Regex.Escape(pragmaName)}\s+(\w+)");
+            foreach (Match match in matches)
+            {
+                if (ShaderBlockUtility.IsInComment(source, match.Index))
+                    continue;
+
+                return match.Groups[1].Value;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -52,6 +61,10 @@ namespace FS.Shaders.Editor
             var matches = Regex.Matches(source, @"#pragma\s+fragmentOutput:(\w+)\s+(\w+)");
             foreach (Match match in matches)
             {
+                // Commented-out pragmas don't count
+                if (ShaderBlockUtility.IsInComment(source, match.Index))
+                    continue;
+
                 map[match.Groups[1].Value] = match.Groups[2].Value;
             }
 
@@ -95,6 +108,18 @@ namespace FS.Shaders.Editor
         {
             if (string.IsNullOrEmpty(source)) return source;
             return Regex.Replace(source, @"#pragma\s+fragmentOutput:\w+\s+\w+\s*\n?", "");
+        }
+
+        /// <summary>
+        /// Blank every <c>#pragma fragmentOutput:X Y</c> directive but keep its line, so
+        /// the line count doesn't change. Used on the authored passes, where Unity warns
+        /// about the unknown pragma and Compiler Messages maps processed lines back to the
+        /// file by position.
+        /// </summary>
+        public static string BlankFragmentOutputs(string source)
+        {
+            if (string.IsNullOrEmpty(source)) return source;
+            return Regex.Replace(source, @"#pragma[ \t]+fragmentOutput:\w+[ \t]+\w+", "");
         }
 
         /// <summary>

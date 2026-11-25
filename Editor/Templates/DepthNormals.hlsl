@@ -6,16 +6,23 @@ Pass
     Name "DepthNormals"
     Tags { "LightMode" = "DepthNormals" }
     ZWrite On
-    Cull Back
+    {{CULL}}
 
     HLSLPROGRAM
     #pragma target 4.5
     {{TESSELLATION_PRAGMAS}}
     {{VERTEX_PRAGMA}}
     #pragma fragment DepthNormalsFragment
-    
+
+    // The pass owns its pipeline keywords (LOD crossfade, instancing).
+    // The forward lighting keywords gate themselves out on SHADERGEN_GENERATED_PASS.
+    #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/DepthNormalsKeywords.hlsl"
+
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-    
+    #if defined(LOD_FADE_CROSSFADE)
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+    #endif
+
     // -------------------------------------------------------------------------
     // Preprocessor from MainPass (includes, defines, keywords)
     // -------------------------------------------------------------------------
@@ -25,7 +32,6 @@ Pass
     // Material Data
     // -------------------------------------------------------------------------
     {{CBUFFER}}
-    {{TEXTURES}}
     
     // -------------------------------------------------------------------------
     // Structs
@@ -90,8 +96,14 @@ Pass
         {
             // Hook: alpha clipping
             {{ALPHA_CLIP_CALL}}
-            
-            return half4(normalize(input.{{NORMAL_WS}}) * 0.5 + 0.5, input.{{SV_POSITION}}.z);
+
+            // LOD crossfade, after alpha clip like URP's DepthNormals passes
+            #ifdef LOD_FADE_CROSSFADE
+                LODFadeCrossFade(input.{{SV_POSITION}});
+            #endif
+
+            // Signed world normal, same as URP's DepthNormals pass (see DepthNormalsPass in BuiltInPasses.cs)
+            return half4(NormalizeNormalPerPixel(input.{{NORMAL_WS}}), 0.0);
         }
     }
     ENDHLSL

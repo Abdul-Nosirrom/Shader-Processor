@@ -6,7 +6,7 @@ namespace FS.Shaders.Editor
 {
     /// <summary>
     /// Utilities for finding, extracting, and modifying named blocks in shader
-    /// source code (CBUFFER, Properties, SubShader, textures/samplers).
+    /// source code (CBUFFER, Properties, SubShader).
     ///
     /// Block operations use regex for marker detection and delegate to
     /// <see cref="ShaderSourceUtility"/> for brace matching where needed.
@@ -46,18 +46,6 @@ namespace FS.Shaders.Editor
 
         static readonly Regex s_subShaderOpenRegex = new Regex(
             @"SubShader\s*\{", RegexOptions.Compiled);
-
-        // Texture and sampler declaration patterns
-        static readonly Regex s_texture2DRegex = new Regex(
-            @"TEXTURE2D\s*\(\s*\w+\s*\)\s*;", RegexOptions.Compiled);
-        static readonly Regex s_texture2DArrayRegex = new Regex(
-            @"TEXTURE2D_ARRAY\s*\(\s*\w+\s*\)\s*;", RegexOptions.Compiled);
-        static readonly Regex s_textureCubeRegex = new Regex(
-            @"TEXTURECUBE\s*\(\s*\w+\s*\)\s*;", RegexOptions.Compiled);
-        static readonly Regex s_texture3DRegex = new Regex(
-            @"TEXTURE3D\s*\(\s*\w+\s*\)\s*;", RegexOptions.Compiled);
-        static readonly Regex s_samplerRegex = new Regex(
-            @"SAMPLER\s*\(\s*\w+\s*\)\s*;", RegexOptions.Compiled);
 
         //=============================================================================
         // CBUFFER
@@ -112,42 +100,98 @@ namespace FS.Shaders.Editor
         }
 
         /// <summary>
-        /// Insert entries before CBUFFER_END. Used by tag processors and
-        /// inheritance to add material property declarations.
-        /// Returns null if CBUFFER_END is not found.
+        /// Insert entries before the CBUFFER_END of every CBUFFER_START(UnityPerMaterial)
+        /// block in source. Used by tag processors and inheritance to add material
+        /// property declarations.
+        ///
+        /// Anchored to UnityPerMaterial blocks specifically - a plain IndexOf("CBUFFER_END")
+        /// could hit a differently-named CBUFFER or a comment. All UnityPerMaterial blocks
+        /// receive the entries because the SRP batcher requires every pass to declare an
+        /// identical UnityPerMaterial layout, so pass-local CBUFFERs must stay in sync.
+        /// Commented-out CBUFFER_START / CBUFFER_END tokens are skipped.
+        ///
+        /// Returns null if no UnityPerMaterial CBUFFER is found.
         /// </summary>
         public static string InsertBeforeCBufferEnd(string source, string entries)
         {
             if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(entries))
                 return source;
 
-            int endPos = source.IndexOf("CBUFFER_END");
-            if (endPos < 0) return null;
+            List<int> endPositions = FindMaterialCBufferEndPositions(source);
+            if (endPositions.Count == 0) return null;
 
-            return source.Insert(endPos, entries);
-        }
-
-        //=============================================================================
-        // Texture / Sampler Declarations
-        //=============================================================================
-
-        /// <summary>
-        /// Remove all texture and sampler declarations from source.
-        /// Handles TEXTURE2D, TEXTURE2D_ARRAY, TEXTURE3D, TEXTURECUBE, and SAMPLER.
-        /// Used during forward pass content extraction where the template provides
-        /// textures via the {{TEXTURES}} marker.
-        /// </summary>
-        public static string StripTextureDeclarations(string source)
-        {
-            if (string.IsNullOrEmpty(source)) return source;
-
-            source = s_texture2DRegex.Replace(source, "");
-            source = s_texture2DArrayRegex.Replace(source, "");
-            source = s_texture3DRegex.Replace(source, "");
-            source = s_textureCubeRegex.Replace(source, "");
-            source = s_samplerRegex.Replace(source, "");
+            // Insert back-to-front so earlier positions stay valid
+            for (int i = endPositions.Count - 1; i >= 0; i--)
+            {
+                source = source.Insert(endPositions[i], entries);
+            }
 
             return source;
+        }
+
+        /// <summary>
+        /// Insert entries on the line after the CBUFFER_END of every
+        /// CBUFFER_START(UnityPerMaterial) block in source. The counterpart of
+        /// <see cref="InsertBeforeCBufferEnd"/> for declarations that belong next to the
+        /// material CBUFFER but outside it (textures and samplers), so every pass with a
+        /// pass-local CBUFFER also gets them. Commented-out tokens are skipped.
+        ///
+        /// Returns null if no UnityPerMaterial CBUFFER is found.
+        /// </summary>
+        public static string InsertAfterCBufferEnd(string source, string entries)
+        {
+            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(entries))
+                return source;
+
+            List<int> endPositions = FindMaterialCBufferEndPositions(source);
+            if (endPositions.Count == 0) return null;
+
+            // Insert back-to-front so earlier positions stay valid
+            for (int i = endPositions.Count - 1; i >= 0; i--)
+            {
+                int endOfLine = source.IndexOf('\n', endPositions[i]);
+                int insertPos = endOfLine < 0 ? source.Length : endOfLine + 1;
+                source = source.Insert(insertPos, entries);
+            }
+
+            return source;
+        }
+
+        /// <summary>
+        /// Positions of the CBUFFER_END token closing each UnityPerMaterial block,
+        /// in source order. Comment-aware on both ends: a CBUFFER_START inside a
+        /// comment isn't a block, and a commented-out CBUFFER_END doesn't close one.
+        /// s_cbufferRegex can't do this, because a match that starts in a comment
+        /// would swallow the real block that follows it.
+        /// </summary>
+        static List<int> FindMaterialCBufferEndPositions(string source)
+        {
+            const string END_TOKEN = "CBUFFER_END";
+            var endPositions = new List<int>();
+
+            foreach (Match start in s_cbufferDetectRegex.Matches(source))
+            {
+                if (IsInComment(source, start.Index))
+                    continue;
+
+                int searchFrom = start.Index + start.Length;
+                while (true)
+                {
+                    int end = source.IndexOf(END_TOKEN, searchFrom, StringComparison.Ordinal);
+                    if (end < 0)
+                        break;
+
+                    if (!IsInComment(source, end))
+                    {
+                        endPositions.Add(end);
+                        break;
+                    }
+
+                    searchFrom = end + END_TOKEN.Length;
+                }
+            }
+
+            return endPositions;
         }
 
         //=============================================================================
@@ -303,25 +347,53 @@ namespace FS.Shaders.Editor
         /// <summary>
         /// Check if a position in source code is inside a comment.
         /// Handles both line comments (//) and block comments (/* */),
-        /// including // inside closed block comments on the same line.
+        /// including // inside closed block comments on the same line, and
+        /// /* openers that are dead because they sit inside a line comment.
         ///
         /// Use this before processing matches from regex to skip commented-out
         /// blocks, passes, pragmas, etc.
         /// </summary>
         public static bool IsInComment(string source, int position)
         {
-            // Check block comments first: find the last /* before position
-            // and see if it's still open (no closing */ before position).
-            int blockCommentStart = source.LastIndexOf("/*", position);
-            if (blockCommentStart >= 0)
+            // Block comments: find the nearest preceding /* that is actually live.
+            // A /* sitting inside a // line comment never opens a block comment -
+            // e.g. "// see Assets/Shaders/* for examples" - and honoring it would
+            // make everything after that line read as commented out (which, at the
+            // importer activation callsite, silently unhooks the shader from the
+            // pipeline). Skip dead openers and keep searching earlier.
+            int searchFrom = position;
+            while (searchFrom >= 0)
             {
+                int blockCommentStart = source.LastIndexOf("/*", searchFrom);
+                if (blockCommentStart < 0)
+                    break;
+
+                if (IsInLineComment(source, blockCommentStart))
+                {
+                    if (blockCommentStart == 0) break;
+                    searchFrom = blockCommentStart - 1;
+                    continue;
+                }
+
                 int blockCommentEnd = source.IndexOf("*/", blockCommentStart);
                 if (blockCommentEnd < 0 || blockCommentEnd > position)
                     return true;
+
+                // Nearest live opener closes before position, so position is not
+                // inside a block comment. (An earlier unclosed opener would have
+                // made this opener's IndexOf("*/") search fail too.)
+                break;
             }
 
-            // Check line comments: scan the current line for //, but skip any //
-            // that falls inside a /* */ block on the same line.
+            return IsInLineComment(source, position);
+        }
+
+        /// <summary>
+        /// Check if a position is preceded by a live // on its own line.
+        /// A // inside a closed /* */ pair on the same line doesn't count.
+        /// </summary>
+        static bool IsInLineComment(string source, int position)
+        {
             int lineStart = source.LastIndexOf('\n', position);
             if (lineStart < 0) lineStart = 0;
             else lineStart++; // skip past the \n character

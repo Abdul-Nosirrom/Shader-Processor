@@ -3,7 +3,8 @@
 // =============================================================================
 // SHADOW_CASTER_KEYWORDS.HLSL
 // Keywords for the ShadowCaster pass.
-// Use: #include_with_pragmas "Library/Keywords/ShadowCasterKeywords.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/ShadowCasterKeywords.hlsl"
+// The ShaderGen ShadowCaster template includes this, so generated passes get it already.
 // =============================================================================
 
 #pragma target 4.5

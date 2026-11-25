@@ -3,8 +3,12 @@
 // =============================================================================
 // DECAL_KEYWORDS.HLSL
 // Keywords for DBuffer decal support.
-// Use: #include_with_pragmas "Library/Keywords/DecalKeywords.hlsl"
+// Use: #include_with_pragmas "Packages/com.abdulal.shaderprocessor/Shaders/Keywords/DecalKeywords.hlsl"
 // =============================================================================
+
+// Forward pass only. ShaderGen's generated passes define SHADERGEN_GENERATED_PASS
+// and declare their own keyword set, see ForwardKeywords.hlsl.
+#ifndef SHADERGEN_GENERATED_PASS
 
 // -----------------------------------------------------------------------------
 // DBuffer Decals
@@ -34,3 +38,5 @@
 //         surfaceData.smoothness);
 // #endif
 // =============================================================================
+
+#endif // SHADERGEN_GENERATED_PASS
